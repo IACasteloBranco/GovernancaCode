@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Governança IA — Laboratório",
+  "version": "0.1.11",
+  "description": "Captura observacional de interações fictícias no laboratório.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "src/background/service-worker.js", "type": "module"},
+  "action": {"default_popup": "src/popup/diagnostics.html"},
+  "content_scripts": [{"matches": ["https://chatgpt.com/*"], "js": ["src/content/observer.js"], "run_at": "document_idle"}]
+}

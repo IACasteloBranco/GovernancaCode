@@ -1,0 +1,6 @@
+[     152ms] [ERROR] Not allowed to load local resource: blob:https://claude.ai/synthetic @ http://127.0.0.1:8769/tests/files-browser.html?run=6:0
+[     153ms] [ERROR] Not allowed to load local resource: blob:https://claude.ai/synthetic @ http://127.0.0.1:8769/tests/files-browser.html?run=6:0
+[     172ms] [ERROR] Not allowed to load local resource: blob:https://claude.ai/synthetic @ http://127.0.0.1:8769/tests/files-browser.html?run=6:0
+[     439ms] [ERROR] Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin @ https://claude.ai/image-preview:0
+[     449ms] [ERROR] Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin @ https://claude.ai/old:0
+[     535ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8769/favicon.ico:0

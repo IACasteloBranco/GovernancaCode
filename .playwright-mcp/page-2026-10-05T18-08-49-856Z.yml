@@ -1,0 +1,7 @@
+- generic [active] [ref=e1]:
+  - heading "Teste DOM de metadados" [level=1] [ref=e2]
+  - generic [ref=e3]: "{ \"passed\": 18, \"results\": [ \"Texto e link comum não comprovam criação\", \"Download guarda nome sem guardar URL\", \"Artefato sem metadados registra somente presença e não duplica controle\", \"Link sandbox identifica o material\", \"Elementos ocultos e exemplos de código não viram materiais\", \"Anexo visível recebe nome, tipo e tamanho\", \"FileList remanescente não comprova envio\", \"Miniatura PNG no compositor identifica anexo\", \"Miniatura sem nome registra presença\", \"Quantidade limitada e truncamento explícito\", \"Raiz desconhecida fica indisponível\", \"Material de outra resposta não é capturado\", \"Claude reconhece editor sem form e delimita compositor\", \"Claude preserva ordem e evita duplicar blocos aninhados\", \"Artefato pertence à resposta Claude\", \"Claude reconhece Enviar habilitado\", \"Claude reconhece streaming\", \"Miniatura irmã do compositor está na região de anexos\" ] }"
+  - main [ref=e5]:
+    - generic [ref=e7]:
+      - generic [ref=e8]: Prompt
+      - button "Send message" [ref=e9]: Enviar

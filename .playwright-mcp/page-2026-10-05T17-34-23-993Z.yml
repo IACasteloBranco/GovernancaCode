@@ -1,0 +1,11 @@
+- generic [active] [ref=f3e1]:
+  - heading "Teste DOM de metadados" [level=1] [ref=f3e2]
+  - generic [ref=f3e3]: "{ \"passed\": 15, \"results\": [ \"Texto e link comum não comprovam criação\", \"Download guarda nome sem guardar URL\", \"Artefato sem metadados registra somente presença e não duplica controle\", \"Link sandbox identifica o material\", \"Elementos ocultos e exemplos de código não viram materiais\", \"Anexo visível recebe nome, tipo e tamanho\", \"FileList remanescente não comprova envio\", \"Quantidade limitada e truncamento explícito\", \"Raiz desconhecida fica indisponível\", \"Material de outra resposta não é capturado\", \"Claude reconhece editor sem form e delimita compositor\", \"Claude preserva ordem e evita duplicar blocos aninhados\", \"Artefato pertence à resposta Claude\", \"Claude reconhece Enviar habilitado\", \"Claude reconhece streaming\" ] }"
+  - main [ref=f3e5]:
+    - generic [ref=f3e6]:
+      - generic [ref=f3e7]: Prompt
+      - button "Stop response" [ref=f3e8]: Enviar
+    - generic [ref=f3e9]: Prompt
+    - generic [ref=f3e10]:
+      - generic [ref=f3e11]: Resposta
+      - button "Material" [ref=f3e12]

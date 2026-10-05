@@ -1,0 +1,4 @@
+[      87ms] [ERROR] Not allowed to load local resource: blob:https://claude.ai/synthetic @ http://127.0.0.1:8767/tests/files-browser.html?run=4:0
+[      87ms] [ERROR] Not allowed to load local resource: blob:https://claude.ai/synthetic @ http://127.0.0.1:8767/tests/files-browser.html?run=4:0
+[     104ms] [ERROR] Not allowed to load local resource: blob:https://claude.ai/synthetic @ http://127.0.0.1:8767/tests/files-browser.html?run=4:0
+[     105ms] [ERROR] Not allowed to load local resource: blob:https://claude.ai/old @ http://127.0.0.1:8767/tests/files-browser.html?run=4:0

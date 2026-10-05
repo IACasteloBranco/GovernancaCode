@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Governança IA — POC Rede",
+  "version": "0.2.4",
+  "description": "Sonda experimental do fluxo de resposta do ChatGPT Web.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "src/background/service-worker.js", "type": "module"},
+  "action": {"default_popup": "src/popup/diagnostics.html"},
+  "content_scripts": [
+    {"matches": ["https://chatgpt.com/*"], "js": ["src/content/network-probe-main.js"], "run_at": "document_start", "world": "MAIN"},
+    {"matches": ["https://chatgpt.com/*"], "js": ["src/content/network-bridge.js"], "run_at": "document_start", "world": "ISOLATED"},
+    {"matches": ["https://chatgpt.com/*"], "js": ["src/content/observer.js"], "run_at": "document_idle", "world": "ISOLATED"}
+  ]
+}

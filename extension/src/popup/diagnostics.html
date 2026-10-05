@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Governança IA</title><link rel="stylesheet" href="diagnostics.css"></head>
+<body><h1>Laboratório de IA</h1><p>Use apenas textos fictícios.</p>
+<form id="config"><label>Conta declarada<input id="account" maxlength="320" required></label>
+<label>Token de laboratório<input id="token" type="password" autocomplete="off" required minlength="24"></label>
+<label><input id="enabled" type="checkbox"> Habilitar captura observacional</label>
+<button>Salvar configuração</button></form>
+<button id="health" type="button">Verificar API local</button>
+<p id="status" role="status"></p><pre id="identity"></pre><h2>Entregas recentes</h2><pre id="events"></pre>
+<script src="diagnostics.js"></script></body></html>
