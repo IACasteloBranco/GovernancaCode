@@ -82,6 +82,50 @@ test('o espelho da requisição conversation resume frames sem publicar texto da
   assert.doesNotMatch(JSON.stringify(events), /RESPOSTA_PRIVADA/);
 });
 
+test('reconstrói somente snapshot final de texto do assistente após [DONE]', async () => {
+  const event = {type: 'message', message: {author: {role: 'assistant'}, status: 'finished_successfully',
+    metadata: {finish_details: {type: 'stop'}}, content: {parts: ['Resposta ', 'sintética QA-NETWORK-CAPTURE']}}};
+  const payload = `data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`;
+  const bytes = new TextEncoder().encode(payload);
+  const response = {ok: true, status: 200, headers: {get: () => 'text/event-stream'}, body: {},
+    clone: () => ({body: new ReadableStream({start(controller) { controller.enqueue(bytes); controller.close(); }})})};
+  const {window, events} = mainContext({fetch: async () => response});
+  await window.fetch('/backend-api/conversation', {method: 'POST'});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const capture = events.find(item => item.data.phase === 'stream_capture')?.data;
+  assert.equal(capture.text, 'Resposta sintética QA-NETWORK-CAPTURE');
+  assert.equal(capture.protocolDone, true);
+  assert.equal(capture.path, '/backend-api/conversation');
+});
+
+test('um erro de leitura após [DONE] ainda pode entregar o snapshot final verificado', async () => {
+  const event = {message: {author: {role: 'assistant'}, status: 'finished_successfully',
+    metadata: {finish_details: {type: 'stop'}}, content: {parts: ['Resposta após done']}}};
+  const bytes = new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`);
+  let reads = 0;
+  const response = {ok: true, status: 200, headers: {get: () => 'text/event-stream'}, body: {},
+    clone: () => ({body: {getReader: () => ({read: () => reads++ === 0
+      ? Promise.resolve({done: false, value: bytes})
+      : Promise.reject(Object.assign(new Error('abort'), {name: 'AbortError'}))})}})};
+  const {window, events} = mainContext({fetch: async () => response});
+  await window.fetch('/backend-api/conversation', {method: 'POST'});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(events.find(item => item.data.phase === 'stream_capture')?.data.text, 'Resposta após done');
+  assert.equal(events.find(item => item.data.phase === 'stream_error')?.data.protocolDone, true);
+});
+
+test('não reconstrói resposta sem marcador [DONE] ou sinal de conclusão do assistente', async () => {
+  const event = {type: 'message', message: {author: {role: 'assistant'}, status: 'in_progress',
+    content: {parts: ['Resposta parcial']}}};
+  const bytes = new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+  const response = {ok: true, status: 200, headers: {get: () => 'text/event-stream'}, body: {},
+    clone: () => ({body: new ReadableStream({start(controller) { controller.enqueue(bytes); controller.close(); }})})};
+  const {window, events} = mainContext({fetch: async () => response});
+  await window.fetch('/backend-api/conversation', {method: 'POST'});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(events.some(item => item.data.phase === 'stream_capture'), false);
+});
+
 test('erro de leitura mantém os eventos observados e registra somente a classe do erro', async () => {
   const bytes = new TextEncoder().encode('event: message\ndata: {"type":"message","content":"PRIVADO"}\n\ndata: [DONE]\n\n');
   let reads = 0;
@@ -127,4 +171,20 @@ test('a ponte aceita somente origem e campos previstos', async () => {
   assert.equal(messages[0].type, 'probe_metadata');
   assert.equal(messages[0].secret, undefined);
   assert.doesNotMatch(JSON.stringify(messages), /não encaminhar/);
+});
+
+test('a ponte isola o texto reconstruído para o observador, sem enviá-lo ao log da sonda', () => {
+  let listener;
+  const customEvents = [];
+  const window = {addEventListener: (_name, callback) => { listener = callback; },
+    dispatchEvent: event => customEvents.push(event)};
+  const chrome = {runtime: {sendMessage: () => Promise.resolve()}};
+  class FakeCustomEvent { constructor(type, init) { this.type = type; this.detail = init.detail; } }
+  runInNewContext(bridgeSource, {window, chrome, location: {origin}, Set, Map, Number, CustomEvent: FakeCustomEvent});
+  const data = {marker: 'governanca-ai-network-probe-v1', attemptId, transport: 'fetch', phase: 'stream_capture',
+    path: '/backend-api/conversation', requestId: 4, protocolDone: true, text: 'Resposta sintética'};
+  listener({source: window, origin, data});
+  assert.equal(customEvents.length, 1);
+  assert.equal(customEvents[0].type, 'governanca-ai-network-capture');
+  assert.deepEqual(JSON.parse(JSON.stringify(customEvents[0].detail)), {attemptId, text: 'Resposta sintética', requestId: 4, protocolDone: true});
 });

@@ -62,6 +62,10 @@
     let doneMarkers = 0;
     let truncated = false;
     let pending = '';
+    const textParts = new Map();
+    let assistantSeen = false;
+    let assistantComplete = false;
+    let captureEmitted = false;
     const streamStarted = performance.now();
     const knownLabels = new Set(['message', 'delta', 'ping', 'done', 'error', 'completion',
       'response', 'response.created', 'response.completed', 'response.output_text.delta',
@@ -119,6 +123,33 @@
           finish = label(parsed?.message?.metadata?.finish_details?.type);
           shape = shapeOf(parsed);
           shapes.set(shape, (shapes.get(shape) || 0) + 1);
+          const message = parsed?.message;
+          const author = message?.author?.role;
+          if (author === 'assistant') {
+            assistantSeen = true;
+            const parts = message?.content?.parts;
+            if (Array.isArray(parts) && parts.every(part => typeof part === 'string')) {
+              textParts.clear();
+              parts.forEach((part, index) => textParts.set(index, part));
+            }
+            const finish = message?.metadata?.finish_details?.type;
+            if (message.status === 'finished_successfully' || ['stop', 'length'].includes(finish))
+              assistantComplete = true;
+          } else if (author && author !== 'assistant') {
+            // Conteúdo de ferramenta/usuário não é candidato à resposta final.
+          } else if (assistantSeen && typeof parsed?.p === 'string') {
+            const match = parsed.p.match(/(?:^|\/)content\/parts\/(\d+)$/);
+            const value = typeof parsed.v === 'string' ? parsed.v
+              : Array.isArray(parsed.v) && parsed.v.every(part => typeof part === 'string') ? parsed.v.join('') : null;
+            if (match && value !== null) {
+              const index = Number(match[1]);
+              if (parsed.o === 'append') textParts.set(index, (textParts.get(index) || '') + value);
+              else if (parsed.o === 'replace' || !parsed.o) textParts.set(index, value);
+              else if (parsed.o !== 'remove') truncated = true;
+            }
+            if (parsed?.message?.status === 'finished_successfully' ||
+                ['stop', 'length'].includes(parsed?.message?.metadata?.finish_details?.type)) assistantComplete = true;
+          }
         } catch { /* O formato ainda não foi identificado. */ }
       }
       const kind = [eventName, payloadType, status, finish].filter(Boolean).join(':').slice(0, 180);
@@ -126,6 +157,13 @@
       lastEvents.push(kind);
       if (lastEvents.length > 8) lastEvents.shift();
       if (eventSequence.length < 32) eventSequence.push(`${kind}--${shape}`.slice(0, 200));
+    }
+    function emitCapture() {
+      if (captureEmitted || doneMarkers !== 1 || truncated || !assistantSeen || !assistantComplete || !textParts.size) return;
+      const text = [...textParts].sort((a, b) => a[0] - b[0]).map(([, value]) => value).join('').trim();
+      if (!text || text.length > 100000) return;
+      captureEmitted = true;
+      emit(attemptId, 'fetch', 'stream_capture', {requestId, path, text, protocolDone: true, truncated: false});
     }
     try {
       while (true) {
@@ -146,8 +184,10 @@
         pending += decoder.decode();
         if (pending.trim()) observe(pending);
       }
+      emitCapture();
       emit(attemptId, 'fetch', 'stream_summary', {...summary(), readerDone: true});
     } catch (error) {
+      emitCapture();
       const allowedErrors = new Set(['AbortError', 'TypeError', 'NetworkError', 'TimeoutError', 'InvalidStateError']);
       emit(attemptId, 'fetch', 'stream_error', {...summary(), readerDone: false,
         errorKind: allowedErrors.has(error?.name) ? error.name : 'other'});
@@ -177,7 +217,7 @@
             emit(attemptId, 'fetch', 'end', {requestId, path, method, status: response?.status,
               contentType, hasBody: Boolean(response?.body), elapsedMs: elapsed(start)});
           }
-          if (candidate && /(?:^|\/)conversation$/.test(path) && response?.ok && response?.body) {
+          if (candidate && /(?:^|\/)conversation$/.test(path) && response?.ok && response?.body && contentType === 'text/event-stream') {
             void inspectConversation(response, attemptId, requestId, path);
           }
         }, () => {

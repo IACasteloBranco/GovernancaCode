@@ -2,7 +2,7 @@
   const MARKER = 'governanca-ai-network-probe-v1';
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const TRANSPORTS = new Set(['fetch', 'xhr', 'eventsource', 'websocket']);
-  const PHASES = new Set(['start', 'end', 'error', 'open', 'message_seen', 'first_message_seen', 'close', 'stream_summary', 'stream_error']);
+  const PHASES = new Set(['start', 'end', 'error', 'open', 'message_seen', 'first_message_seen', 'close', 'stream_summary', 'stream_error', 'stream_capture']);
   const countByAttempt = new Map();
 
   window.addEventListener('message', event => {
@@ -11,6 +11,15 @@
     if (!data || data.marker !== MARKER || !UUID.test(data.attemptId || '')) return;
     if (!TRANSPORTS.has(data.transport) || !PHASES.has(data.phase)) return;
     if (typeof data.path !== 'string' || !/^\/[a-zA-Z0-9/._:~\-]{0,239}$/.test(data.path)) return;
+    if (data.phase === 'stream_capture') {
+      if (data.transport !== 'fetch' || data.protocolDone !== true || data.truncated === true ||
+          typeof data.text !== 'string' || !data.text.trim() || data.text.length > 100000) return;
+      window.dispatchEvent(new CustomEvent('governanca-ai-network-capture', {detail: {
+        attemptId: data.attemptId, text: data.text, requestId: Number.isSafeInteger(data.requestId) ? data.requestId : null,
+        protocolDone: true
+      }}));
+      return;
+    }
     const count = countByAttempt.get(data.attemptId) || 0;
     if (count >= 80) return;
     countByAttempt.set(data.attemptId, count + 1);
