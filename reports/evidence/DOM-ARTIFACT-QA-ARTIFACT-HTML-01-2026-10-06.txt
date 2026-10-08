@@ -1,0 +1,25 @@
+Sanitized DOM snapshot — Artifact QA-ARTIFACT-HTML-01
+Date: 2026-10-06
+Site: Claude Web
+Extension version: 0.6.10
+Interaction ID: b1141fa9-1166-4b4e-ba3e-f1cc045b1650
+Capture: accessibility/DOM-derived semantic tree from the rendered Artifact
+Sanitization: kept only this Artifact subtree and synthetic table content; omitted the chat URL, account label, remote iframe origin, dynamic element IDs, and controls outside the Artifact.
+
+container [label="visualize: QA-ARTIFACT-HTML-01"]
+  iframe [title="Visualize Widget"]
+    container [class="vis-container"]
+      heading [level=3]: "Materiais de teste"
+      table
+        row
+          cell: "Item"
+          cell: "Status"
+        row
+          cell: "Item fictício A"
+          cell: "teste"
+        row
+          cell: "Item fictício B"
+          cell: "teste"
+        row
+          cell: "Item fictício C"
+          cell: "teste"

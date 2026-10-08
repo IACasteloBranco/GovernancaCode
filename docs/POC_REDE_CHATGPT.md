@@ -59,3 +59,17 @@ Retenção/liberação só será considerada após a POC A demonstrar correlaç�
 Registrar para cada caso: versão do Chrome, modo Chat/Work, horário, ID local do envio, transporte, caminho redigido, status, tipo de conteúdo, começo/fim observados, eventos relevantes, resposta reconstruída, resposta visível e diferença. Usar somente textos sintéticos. A lista de casos inclui curta, longa, Markdown, tabela, código, interrupção, erro, regeneração, edição, envios consecutivos, conversa nova, troca de conversa e ferramentas quando disponíveis.
 
 **Próximo gate:** executar a sonda de metadados no ChatGPT Web real. Não declarar mecanismo, sinal de término, POC A validada ou POC B viável antes dessa evidência.
+
+## 6. Implementação experimental 0.3.0 (2026-10-07)
+
+A pasta isolada `Extensão/extension-network-poc/` agora contém uma tentativa de espelhamento e reconstrução para `text/event-stream`, além dos módulos de bloqueio/política copiados da candidata integrada. O parser aceita somente snapshots de texto do assistente com estado terminal reconhecido e exatamente um `[DONE]`. A extensão compara o texto candidato com o DOM e só usa o valor de rede no envio ao backend local quando há igualdade e nenhuma ambiguidade; caso contrário, usa o snapshot DOM existente. A resposta continua sendo entregue uma vez por interação.
+
+Isso é uma implementação experimental da POC A, não uma validação do protocolo nem autorização para substituir a captura DOM. O ensaio CDP de 2026-10-07 confirmou apenas o stream do site; a aba não tinha marcador da extensão e sua versão não foi confirmada. O Work precisa carregar e identificar a `0.3.0`, validar bloqueio, correlação, igualdade e persistência. Regeneração, ferramentas e requisições concorrentes continuam sem correlação causal demonstrada. POC B / Buffered Mode continua fora do escopo.
+
+### Correção de finalização 0.3.1 (2026-10-07)
+
+O primeiro fluxo real da 0.3.0 capturou o prompt, mas não gerou resposta persistida. O relatório não continha os eventos locais necessários para localizar se houve associação, finalização ou falha no POST. A implementação 0.3.1 removeu uma dependência indevida entre o diagnóstico comparativo e o envio da resposta, adicionou retry idempotente para falhas transitórias, aceitou o papel de mensagem no próprio nó e registra estágios locais sem texto (`started`, `answer_found`, `finalizing`, `delivery_error`). A versão está apenas pronta para reteste; ainda não se comprovou captura de resposta real.
+
+### Sincronização do bloqueador 0.3.2 (2026-10-07)
+
+No reteste da 0.3.1, a aba mostrou “bloqueio manual ligado” mesmo após o usuário informar que a opção estava desligada. A inspeção identificou que o bridge começava com `manualBlocked=true` e só recebia a configuração após a consulta à atribuição da instalação. Na 0.3.2, o bloqueio segue fechado durante a sincronização, mas a mensagem passa a informar estado não sincronizado; a configuração manual é enviada antes da consulta de atribuição, que depois atualiza o estado. Isso evita atribuir incorretamente o bloqueio ao controle manual. A versão exige reteste em navegador; cópias antigas da extensão ainda precisam ser excluídas/identificadas no Chrome.

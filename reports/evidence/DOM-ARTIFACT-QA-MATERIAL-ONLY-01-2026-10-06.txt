@@ -1,0 +1,25 @@
+Sanitized DOM snapshot — Artifact QA-MATERIAL-ONLY-01
+Date: 2026-10-06
+Site: Claude Web
+Extension version: 0.6.10
+Interaction ID: da9f2708-f1c1-4993-984c-3128ae554f36
+Capture: accessibility/DOM-derived semantic tree from the rendered Artifact
+Sanitization: kept only this Artifact subtree and synthetic table content; omitted the chat URL, account label, remote iframe origin, dynamic element IDs, and controls outside the Artifact.
+
+container [label="visualize: QA-MATERIAL-ONLY-01"]
+  iframe [title="Visualize Widget"]
+    container [class="vis-container"]
+      heading [level=3]: "Registro de materiais"
+      table
+        row
+          cell: "Identificador"
+          cell: "Condição"
+        row
+          cell: "Elemento X"
+          cell: "teste"
+        row
+          cell: "Elemento Y"
+          cell: "teste"
+        row
+          cell: "Elemento Z"
+          cell: "teste"

@@ -1,4 +1,16 @@
-# Claude e metadados de arquivos — versão 0.6.0
+# Claude e metadados de arquivos — histórico até a versão 0.6.12
+
+## Correção 0.6.12 — Artifact, Markdown e conclusão curta
+
+A extração Claude prioriza contêineres de Markdown e serializa headings, listas, tabelas e blocos de código. Artifacts são reconhecidos apenas quando um `iframe[title="Visualize Widget"]` visível está presente no host da mensagem atual; captura somente presença no host, nunca lê o iframe remoto. O rótulo acessível `visualize:` pode fornecer nome sintético opcional. O marcador `VvisualizeVvisualize show_widget...` só é removido quando corresponde ao Artifact observado. A conclusão curta exige um sinal explícito de término em região de status, resposta associada, compositor pronto e estabilidade; texto estável sozinho continua `incomplete`, e interrupção explícita continua `incomplete`.
+
+O Work forneceu snapshots semânticos sanitizados em `reports/evidence/DOM-ARTIFACT-QA-ARTIFACT-HTML-01-2026-10-06.txt` e `DOM-ARTIFACT-QA-MATERIAL-ONLY-01-2026-10-06.txt`. A correção usa os sinais confirmados e tem fixtures sintéticas. `0.6.12` aguarda o reteste independente; não representa aprovação de QA nem rollout.
+
+## Correção 0.6.10 — identificação do reteste de fidelidade
+
+A versão 0.6.10 identifica o pacote que contém a extração específica da resposta Claude adicionada para `BUG-CLAUDE-20261006-001`. A versão aparece no manifest, no popup e nos registros `adapter_version` enviados pelo service worker e pelo observador. Esta identificação permite distinguir o código atualizado de uma extensão 0.6.9 ainda carregada; a captura correta no DOM real depende de reteste independente.
+
+Para recarregar a versão correta no Chrome: abra `chrome://extensions`, localize e remova a extensão integrada antiga; use **Carregar sem compactação** e selecione exatamente `Extensão/extension-prompt-block-poc/`; confirme **0.6.10** nos detalhes da extensão e no popup de diagnóstico; recarregue a aba do Claude; só então repita os envios por botão e Enter e confira `adapter_version` e `responses[].text` no SQLite/API. Se o registro ainda indicar 0.6.9, interrompa o reteste e verifique qual pasta foi carregada. A questão de política de CPF continua separada como `POLICY_QUESTION`.
 
 ## Correção 0.6.8 — ativação da captura no popup
 

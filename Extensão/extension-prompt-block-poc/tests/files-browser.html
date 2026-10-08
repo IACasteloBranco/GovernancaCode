@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><title>Teste DOM de metadados</title>
+<body><h1>Teste DOM de metadados</h1><pre id="result">Executando</pre><div id="fixture"></div>
+<script src="../src/content/files.js"></script>
+<script>
+(async () => {
+  const fixture = document.querySelector('#fixture');
+  const results = [];
+  const check = (name, condition) => { if (!condition) throw new Error(name); results.push(name); };
+  const observe = (generated = true) => GovernancaFiles.observe(fixture, generated);
+  try {
+    fixture.innerHTML = '<p>Criei o arquivo report.pdf</p><a href="https://example.invalid/report.pdf">Referência</a>';
+    check('Texto e link comum não comprovam criação', observe().capture_status === 'not_observed');
+    fixture.innerHTML = '<a download="report.pdf" href="blob:synthetic">Baixar</a>';
+    check('Download guarda nome sem guardar URL', observe().items[0].name === 'report.pdf' && !('url' in observe().items[0]));
+    fixture.innerHTML = '<div data-artifact-id="synthetic"><button aria-label="Download">Baixar</button></div>';
+    check('Artefato sem metadados registra somente presença e não duplica controle', observe().items.length === 1 && observe().items[0].capture_status === 'presence_only');
+    fixture.innerHTML = '<div data-testid="assistant-message"><div class="font-claude-response">O Artifact HTML é uma opção para organizar os dados.</div></div>';
+    check('Menção comum a Artifact sem cartão não gera material', GovernancaFiles.observe(fixture.querySelector('[data-testid="assistant-message"]'), true).capture_status === 'not_observed');
+    fixture.innerHTML = '<a href="sandbox:/mnt/data/report.csv">report.csv</a>';
+    check('Link sandbox identifica o material', observe().items[0].name === 'report.csv');
+    fixture.innerHTML = '<div hidden data-file-name="hidden.csv"></div><pre><a download="example.txt">Exemplo</a></pre>';
+    check('Elementos ocultos e exemplos de código não viram materiais', observe().capture_status === 'not_observed');
+    fixture.innerHTML = '<input type="file"><div data-file-name="input.csv"></div>';
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['synthetic'], 'input.csv', {type: 'text/csv'}));
+    fixture.querySelector('input').files = transfer.files;
+    const metadata = observe(false).items[0];
+    check('Anexo visível recebe nome, tipo e tamanho', metadata.name === 'input.csv' && metadata.mime_type === 'text/csv' && metadata.size_bytes === 9);
+    fixture.querySelector('[data-file-name]').remove();
+    check('FileList remanescente não comprova envio', observe(false).capture_status === 'not_observed');
+    fixture.innerHTML = '<div contenteditable="true" class="ProseMirror">Prompt</div><input type="file"><button aria-label="Remove file">Remover</button>';
+    const selectedFile = new DataTransfer();
+    selectedFile.items.add(new File(['synthetic'], 'selection.png', {type: 'image/png'}));
+    fixture.querySelector('input').files = selectedFile.files;
+    fixture.querySelector('input').dispatchEvent(new Event('change', {bubbles: true}));
+    const selectedObservation = observe(false);
+    check('Evento de seleção preserva metadados sem cartão visual', selectedObservation.items[0].name === 'selection.png' && selectedObservation.items[0].source === 'selection_event');
+    fixture.querySelector('button').click();
+    check('Remover anexo limpa seleção pendente', observe(false).capture_status === 'not_observed');
+    fixture.innerHTML = '';
+    fixture.innerHTML = '<img src="blob:https://claude.ai/synthetic" alt="sample.png">';
+    check('Miniatura PNG no compositor identifica anexo', observe(false).items[0].name === 'sample.png');
+    fixture.innerHTML = '<img src="blob:https://claude.ai/synthetic">';
+    check('Miniatura sem nome registra presença', observe(false).items[0].capture_status === 'presence_only');
+    fixture.innerHTML = '<div class="cds-card-body"><img src="https://claude.ai/image-preview" alt=""></div>';
+    check('Cartão de imagem Claude sem alt registra presença', observe(false).items[0].capture_status === 'presence_only');
+    fixture.innerHTML = Array.from({length: 21}, (_, i) => `<a download="file${i}.csv">Baixar</a>`).join('');
+    check('Quantidade limitada e truncamento explícito', observe().items.length === 20 && observe().truncated);
+    check('Raiz desconhecida fica indisponível', GovernancaFiles.observe(null).capture_status === 'unavailable');
+    fixture.innerHTML = '<div id="old"><a download="old.csv">Baixar</a></div><div id="current">Resposta atual</div>';
+    check('Material de outra resposta não é capturado', GovernancaFiles.observe(fixture.querySelector('#current'), true).capture_status === 'not_observed');
+    const adapterSource = await (await fetch('../src/content/platform.js', {cache: 'no-store'})).text();
+    new Function('location', adapterSource)({href: 'https://claude.ai/chat/synthetic'});
+    fixture.innerHTML = '<main><div id="composer"><div contenteditable="true" class="ProseMirror">Prompt</div><div data-file-name="input.csv"></div><button aria-label="Send message">Enviar</button></div><div data-testid="user-message">Prompt</div><div data-testid="assistant-message"><div class="font-claude-response">Resposta</div><button data-testid="artifact-button">Material</button></div></main>';
+    const adapter = GovernancaPlatform;
+    fixture.innerHTML = '<div role="status">Claude terminou a resposta</div>';
+    check('Claude expõe sinal de conclusão em região de status acessível', adapter.completionSignal());
+    fixture.innerHTML = '<div data-testid="assistant-message"><div aria-label="visualize: SYNTHETIC_ARTIFACT_TITLE"><div class="vis-container"><iframe title="Visualize Widget"></iframe></div></div></div>';
+    const remoteWidget = fixture.querySelector('iframe[title="Visualize Widget"]');
+    Object.defineProperty(remoteWidget, 'contentDocument', {get() { throw new Error('iframe remoto não deve ser lido'); }});
+    const artifactObservation = GovernancaFiles.observe(fixture.querySelector('[data-testid="assistant-message"]'), true);
+    check('Artifact HTML captura presença no elemento hospedeiro sem ler iframe remoto', artifactObservation.capture_status === 'observed' && artifactObservation.items.length === 1 && artifactObservation.items[0].capture_status === 'presence_only' && artifactObservation.items[0].name === 'SYNTHETIC_ARTIFACT_TITLE');
+    fixture.innerHTML = '<div><div class="font-claude-response">Resposta</div><div aria-label="visualize: QA_ARTIFACT_SIBLING"><div class="vis-container"><iframe title="Visualize Widget"></iframe></div></div></div>';
+    check('Artifact irmão da resposta é associado pelo contêiner de turno de resposta única', GovernancaFiles.observe(fixture.querySelector('.font-claude-response'), true).items[0]?.name === 'QA_ARTIFACT_SIBLING');
+    fixture.innerHTML = '<div data-testid="assistant-message"><div class="font-claude-response">A palavra Artifact aparece em uma frase comum.</div></div>';
+    check('Texto comum sobre Artifact sem widget não gera material', GovernancaFiles.observe(fixture.querySelector('[data-testid="assistant-message"]'), true).capture_status === 'not_observed');
+    fixture.innerHTML = '<div id="old" data-testid="assistant-message"><div aria-label="visualize: OLD_ARTIFACT"><div class="vis-container"><iframe title="Visualize Widget"></iframe></div></div></div><div id="current" data-testid="assistant-message"><div class="font-claude-response">Resposta atual</div></div>';
+    check('Artifact de resposta antiga não aparece na observação da resposta atual', GovernancaFiles.observe(fixture.querySelector('#current'), true).capture_status === 'not_observed');
+    check('Claude reconhece editor sem form e delimita compositor', adapter.editor().textContent === 'Prompt' && adapter.composer().id === 'composer');
+    const messages = adapter.messages();
+    check('Claude preserva ordem e evita duplicar blocos aninhados', messages.length === 2 && adapter.role(messages[0]) === 'user' && adapter.role(messages[1]) === 'assistant');
+    check('Artefato pertence à resposta Claude', GovernancaFiles.observe(messages[1], true).capture_status === 'observed');
+    fixture.innerHTML = '<div data-testid="assistant-message"><div class="font-claude-response"><span class="sr-only">Claude respondeu:</span><p>QA-CLAUDE-BASE-01</p><span aria-hidden="true">★ ◉</span><button aria-label="Copiar resposta">Copiar</button><time>agora</time></div></div>';
+    const responseNode = fixture.querySelector('[data-testid="assistant-message"]');
+    check('Claude captura somente o texto e remove controles e elementos acessíveis', adapter.responseText(responseNode) === 'QA-CLAUDE-BASE-01');
+    fixture.innerHTML = '<div data-testid="assistant-message"><div class="font-claude-response"><p>Primeiro parágrafo</p><p>**Segundo parágrafo**</p></div></div>';
+    check('Claude preserva parágrafos e Markdown legítimo', adapter.responseText(fixture.querySelector('[data-testid="assistant-message"]')) === 'Primeiro parágrafo\n\n**Segundo parágrafo**');
+    fixture.innerHTML = '<div data-testid="assistant-message"><div class="font-claude-response"><div class="standard-markdown"><h2>QA-MD-START</h2><p>Introdução sintética.</p><ul><li>QA-MD-CELL</li></ul><table><tr><th>Campo</th><th>Valor</th></tr><tr><td>Tipo</td><td>QA-MD-CELL</td></tr></table><pre><code class="language-html">&lt;div&gt;QA-MD-CODE&lt;/div&gt;</code></pre></div><aside>O Claude trabalha diretamente com sua base de código.</aside></div></div>';
+    const markdownResponse = adapter.responseText(fixture.querySelector('[data-testid="assistant-message"]'));
+    check('Claude preserva heading, lista, células de tabela e bloco de código Markdown', markdownResponse.includes('# QA-MD-START') && markdownResponse.includes('- QA-MD-CELL') && markdownResponse.includes('| Tipo | QA-MD-CELL |') && markdownResponse.includes('QA-MD-CODE'));
+    check('Claude exclui texto fora do contêiner Markdown', !markdownResponse.includes('O Claude trabalha'));
+    fixture.innerHTML = '<div data-testid="assistant-message"><div class="font-claude-response"><div class="standard-markdown"><p>Texto principal.</p></div><div class="code-block"><pre><code class="language-js">const marker = "QA-MD-CODE-0612";</code></pre></div><aside>Conteúdo externo.</aside></div></div>';
+    const siblingCodeResponse = adapter.responseText(fixture.querySelector('[data-testid="assistant-message"]'));
+    check('Claude preserva pre/code em wrapper irmão do Markdown', siblingCodeResponse.includes('QA-MD-CODE-0612') && siblingCodeResponse.includes('```js'));
+    check('Claude mantém a captura de código dentro da resposta', !siblingCodeResponse.includes('Conteúdo externo.'));
+    fixture.innerHTML = '<div data-testid="assistant-message"><div class="font-claude-response"></div><a data-artifact-id="synthetic">Material</a></div>';
+    check('Resposta vazia com material continua sem texto extraído', adapter.responseText(fixture.querySelector('[data-testid="assistant-message"]')) === '' && GovernancaFiles.observe(fixture.querySelector('[data-testid="assistant-message"]'), true).capture_status === 'observed');
+    fixture.innerHTML = '<main><div id="composer"><div contenteditable="true" class="ProseMirror">Prompt</div><div data-file-name="input.csv"></div><button aria-label="Send message">Enviar</button></div><div data-testid="user-message">Prompt</div><div data-testid="assistant-message"><div class="font-claude-response">Resposta</div><button data-testid="artifact-button">Material</button></div></main>';
+    check('Claude reconhece Enviar habilitado', adapter.ready() && adapter.sendButton(fixture.querySelector('[aria-label="Send message"]')));
+    fixture.querySelector('[aria-label="Send message"]').setAttribute('aria-label', 'Stop response');
+    check('Claude reconhece streaming', adapter.streaming() && !adapter.ready());
+    fixture.innerHTML = '<main><section><div id="composer"><div contenteditable="true" class="ProseMirror">Prompt</div><button aria-label="Send message">Enviar</button></div><img src="blob:https://claude.ai/synthetic"></section></main>';
+    check('Miniatura irmã do compositor está na região de anexos', adapter.fileRoot()?.tagName === 'SECTION' && GovernancaFiles.observe(adapter.fileRoot(), false).capture_status === 'observed');
+    fixture.innerHTML = '<main><section><div id="composer"><div contenteditable="true" class="ProseMirror">Prompt</div><button aria-label="Send message">Enviar</button></div><div data-testid="user-message"><div class="cds-card-body"><img src="https://claude.ai/old" alt=""></div></div></section></main>';
+    check('Imagem do histórico não vira anexo do novo envio', adapter.fileRoot()?.id === 'composer' && GovernancaFiles.observe(adapter.fileRoot(), false).capture_status === 'not_observed');
+    fixture.innerHTML = '<main><section><div id="composer"><div contenteditable="true" class="ProseMirror">Prompt</div><button aria-label="Send message">Enviar</button></div><div class="cds-card-body"><img src="https://claude.ai/image-preview" alt=""></div></section></main>';
+    check('Cartão de imagem Claude ao lado do compositor é inspecionado', adapter.fileRoot()?.tagName === 'SECTION' && GovernancaFiles.observe(adapter.fileRoot(), false).capture_status === 'observed');
+    window.testResult = {passed: results.length, results};
+  } catch (error) { window.testResult = {passed: results.length, results, error: error.message}; }
+  document.querySelector('#result').textContent = JSON.stringify(window.testResult, null, 2);
+})();
+</script></body></html>
