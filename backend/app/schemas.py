@@ -148,6 +148,104 @@ class ResponseCreate(BaseModel):
         return value.astimezone(timezone.utc)
 
 
+class StreamCaptureCreate(BaseModel):
+    """Metadata-only stream record; content fields are rejected by extra=forbid."""
+    model_config = ConfigDict(extra="forbid")
+
+    capture_id: UUID
+    device_installation_id: UUID
+    platform: Literal["chatgpt_web"]
+    path: Literal["/backend-api/f/conversation"]
+    request_id: int = Field(ge=0, le=9007199254740991, strict=True)
+    status_code: int = Field(ge=100, le=599, strict=True)
+    content_type: Literal["text/event-stream"]
+    capture_status: Literal["complete", "incomplete"]
+    response_chars: int = Field(ge=1, le=100000, strict=True)
+    bytes: int = Field(ge=0, le=4000000, strict=True)
+    chunks: int = Field(ge=0, le=4000000, strict=True)
+    frames: int = Field(ge=0, le=4000000, strict=True)
+    done_markers: int = Field(ge=0, le=1000, strict=True)
+    protocol_done: bool
+    reader_done: bool
+    reader_aborted_after_done: bool
+    truncated: bool
+    stream_elapsed_ms: int = Field(ge=0, le=180000, strict=True)
+    event_types: list[str] = Field(max_length=32)
+    event_shapes: list[str] = Field(max_length=32)
+    event_sequence: list[str] = Field(max_length=32)
+    observed_at: datetime
+    adapter_version: Literal["0.3.0"]
+
+    @field_validator("event_types", "event_shapes", "event_sequence")
+    @classmethod
+    def validate_safe_labels(cls, values: list[str]) -> list[str]:
+        import re
+        if any(len(value) > 200 or not re.fullmatch(r"[a-zA-Z0-9_.:=-]{1,200}", value) for value in values):
+            raise ValueError("invalid event labels")
+        return values
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("observed_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def validate_completion(self) -> "StreamCaptureCreate":
+        if self.capture_status == "complete" and (
+            not self.protocol_done or not (self.reader_done or self.reader_aborted_after_done) or self.truncated
+        ):
+            raise ValueError("complete capture has inconsistent terminal state")
+        if self.reader_aborted_after_done and (self.reader_done or not self.protocol_done or self.truncated):
+            raise ValueError("invalid reader abort state")
+        return self
+
+
+class ArtifactMetadataCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: UUID
+    device_installation_id: UUID
+    platform: Literal["chatgpt_web"]
+    source: Literal["metadata_json", "download_headers"]
+    file_name: str | None = Field(default=None, max_length=255)
+    mime_type: str | None = Field(default=None, max_length=127)
+    size_bytes: int | None = Field(default=None, ge=0, le=9007199254740991, strict=True)
+    observed_at: datetime
+
+    @field_validator("file_name")
+    @classmethod
+    def validate_file_name(cls, value: str | None) -> str | None:
+        if value is not None and (not value or value in {".", ".."} or any(char in value for char in "\\/\x00") or
+                                  any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            raise ValueError("invalid file name")
+        return value
+
+    @field_validator("mime_type")
+    @classmethod
+    def validate_mime_type(cls, value: str | None) -> str | None:
+        if value is not None:
+            import re
+            if not re.fullmatch(r"[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+", value):
+                raise ValueError("invalid MIME type")
+            return value.lower()
+        return value
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("observed_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def require_some_metadata(self) -> "ArtifactMetadataCreate":
+        if self.file_name is None and self.mime_type is None and self.size_bytes is None:
+            raise ValueError("at least one file metadata field is required")
+        return self
+
+
 class EventRecord(BaseModel):
     event_type: str
     result: str
@@ -169,9 +267,17 @@ class ResponseAccepted(BaseModel):
     duplicate: bool = False
 
 
+class StreamCaptureAccepted(BaseModel):
+    capture_id: UUID
+    status: Literal["stored"]
+    received_at: datetime
+    attributed_person: str
+    duplicate: bool = False
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
-    schema_version: Literal["0.1"]
+    schema_version: Literal["0.4"]
 
 
 class InteractionDetail(BaseModel):

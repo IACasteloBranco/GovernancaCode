@@ -14,12 +14,15 @@ from pydantic import BaseModel
 
 from .db import clean_expired, connect, initialize, iso, json_dump, utc_now
 from .schemas import (
+    ArtifactMetadataCreate,
     HealthResponse,
     InteractionAccepted,
     InteractionCreate,
     InteractionDetail,
     ResponseAccepted,
     ResponseCreate,
+    StreamCaptureAccepted,
+    StreamCaptureCreate,
 )
 from .security import require_lab_token
 from .machine_identity import Machine, enroll_machine, project_id_from_url, require_machine_signature
@@ -29,7 +32,6 @@ logger = logging.getLogger("backend")
 
 
 def fingerprint(payload: dict) -> str:
-    # Preserve idempotency for events written before the metadata migration.
     payload = dict(payload)
     if payload.get("attachments_capture_status") == "unavailable":
         payload.pop("attachments_capture_status")
@@ -94,13 +96,46 @@ if settings.cors_origins:
         allow_origins=settings.cors_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "X-Machine-Id", "X-Machine-Timestamp",
+                       "X-Machine-Nonce", "X-Machine-Signature"],
     )
 
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", schema_version="0.1")
+    return HealthResponse(status="ok", schema_version="0.4")
+
+
+@app.get("/v1/stream-captures/recent", dependencies=[Depends(require_lab_token)])
+def recent_stream_captures(settings: Settings = Depends(get_settings)) -> dict:
+    with connect(settings) as db:
+        rows = db.execute(
+            """SELECT capture_id, device_installation_id, attributed_person, machine_key_fingerprint,
+                      platform, path, request_id, status_code, content_type, capture_status,
+                      response_chars, bytes, chunks, frames, done_markers, protocol_done,
+                      reader_done, reader_aborted_after_done, truncated, stream_elapsed_ms,
+                      event_types_json, event_shapes_json, event_sequence_json, observed_at, received_at
+               FROM stream_captures ORDER BY received_at DESC LIMIT 20"""
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["event_types"] = json.loads(item.pop("event_types_json"))
+        item["event_shapes"] = json.loads(item.pop("event_shapes_json"))
+        item["event_sequence"] = json.loads(item.pop("event_sequence_json"))
+        items.append(item)
+    return {"items": items}
+
+
+@app.get("/v1/artifact-metadata/recent", dependencies=[Depends(require_lab_token)])
+def recent_artifact_metadata(settings: Settings = Depends(get_settings)) -> dict:
+    with connect(settings) as db:
+        rows = db.execute(
+            """SELECT artifact_id, device_installation_id, attributed_person, machine_key_fingerprint,
+                      platform, source, file_name, mime_type, size_bytes, observed_at, received_at
+               FROM artifact_metadata ORDER BY received_at DESC LIMIT 20"""
+        ).fetchall()
+    return {"items": [dict(row) for row in rows]}
 
 
 class MachineEnrollment(BaseModel):
@@ -269,6 +304,112 @@ def create_response(
             (str(interaction_id), "response", payload.capture_status, iso(received_at)),
         )
     return ResponseAccepted(interaction_id=interaction_id, status=payload.capture_status, received_at=received_at)
+
+
+@app.post(
+    "/v1/stream-captures",
+    response_model=StreamCaptureAccepted,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_stream_capture(
+    payload: StreamCaptureCreate,
+    response: Response,
+    machine: Machine | None = Depends(require_machine_signature),
+    settings: Settings = Depends(get_settings),
+) -> StreamCaptureAccepted:
+    if machine is None:
+        raise HTTPException(status_code=403, detail="Assigned machine identity is required")
+    if str(payload.device_installation_id) != machine.installation_id:
+        raise HTTPException(status_code=409, detail="Machine and installation do not match")
+
+    body = payload.model_dump(mode="json")
+    body["machine_key_fingerprint"] = machine.fingerprint
+    request_fingerprint = fingerprint(body)
+    received_at = utc_now()
+    capture_id = str(payload.capture_id)
+    with connect(settings) as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute(
+            "SELECT request_fingerprint, received_at, attributed_person FROM stream_captures WHERE capture_id = ?",
+            (capture_id,),
+        ).fetchone()
+        if existing:
+            if existing["request_fingerprint"] != request_fingerprint:
+                raise HTTPException(status_code=409, detail="capture_id was already used with different metadata")
+            response.status_code = status.HTTP_200_OK
+            return StreamCaptureAccepted(
+                capture_id=payload.capture_id,
+                status="stored",
+                received_at=datetime.fromisoformat(existing["received_at"]),
+                attributed_person=existing["attributed_person"],
+                duplicate=True,
+            )
+        db.execute(
+            """INSERT INTO stream_captures (
+                capture_id, request_fingerprint, device_installation_id, attributed_person,
+                machine_key_fingerprint, platform, path, request_id, status_code, content_type,
+                capture_status, response_chars, bytes, chunks, frames, done_markers,
+                protocol_done, reader_done, reader_aborted_after_done, truncated, stream_elapsed_ms,
+                event_types_json, event_shapes_json, event_sequence_json, observed_at, received_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                capture_id, request_fingerprint, machine.installation_id, machine.person_name,
+                machine.fingerprint, payload.platform, payload.path, payload.request_id, payload.status_code,
+                payload.content_type, payload.capture_status, payload.response_chars, payload.bytes,
+                payload.chunks, payload.frames, payload.done_markers, int(payload.protocol_done),
+                int(payload.reader_done), int(payload.reader_aborted_after_done), int(payload.truncated),
+                payload.stream_elapsed_ms, json_dump(payload.event_types), json_dump(payload.event_shapes),
+                json_dump(payload.event_sequence), iso(payload.observed_at), iso(received_at),
+            ),
+        )
+    return StreamCaptureAccepted(
+        capture_id=payload.capture_id,
+        status="stored",
+        received_at=received_at,
+        attributed_person=machine.person_name,
+    )
+
+
+@app.post("/v1/artifact-metadata", status_code=status.HTTP_201_CREATED)
+def create_artifact_metadata(
+    payload: ArtifactMetadataCreate,
+    response: Response,
+    machine: Machine | None = Depends(require_machine_signature),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    if machine is None:
+        raise HTTPException(status_code=403, detail="Assigned machine identity is required")
+    if str(payload.device_installation_id) != machine.installation_id:
+        raise HTTPException(status_code=409, detail="Machine and installation do not match")
+    body = payload.model_dump(mode="json")
+    body["machine_key_fingerprint"] = machine.fingerprint
+    request_fingerprint = fingerprint(body)
+    received_at = utc_now()
+    artifact_id = str(payload.artifact_id)
+    with connect(settings) as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute(
+            "SELECT request_fingerprint, received_at, attributed_person FROM artifact_metadata WHERE artifact_id = ?",
+            (artifact_id,),
+        ).fetchone()
+        if existing:
+            if existing["request_fingerprint"] != request_fingerprint:
+                raise HTTPException(status_code=409, detail="artifact_id was already used with different metadata")
+            response.status_code = status.HTTP_200_OK
+            return {"artifact_id": artifact_id, "status": "stored", "received_at": existing["received_at"],
+                    "attributed_person": existing["attributed_person"], "duplicate": True}
+        db.execute(
+            """INSERT INTO artifact_metadata (
+                artifact_id, request_fingerprint, device_installation_id, attributed_person,
+                machine_key_fingerprint, platform, source, file_name, mime_type, size_bytes,
+                observed_at, received_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (artifact_id, request_fingerprint, machine.installation_id, machine.person_name,
+             machine.fingerprint, payload.platform, payload.source, payload.file_name, payload.mime_type,
+             payload.size_bytes, iso(payload.observed_at), iso(received_at)),
+        )
+    return {"artifact_id": artifact_id, "status": "stored", "received_at": iso(received_at),
+            "attributed_person": machine.person_name, "duplicate": False}
 
 
 @app.get(

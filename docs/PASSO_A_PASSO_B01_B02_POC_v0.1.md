@@ -4,7 +4,7 @@
 **Referência:** [roteiro de validação local](ROTEIRO_VALIDACAO_LOCAL_POC_v0.1.md).  
 **Objetivo:** verificar se cada uma das 20 tentativas reais de envio produz exatamente um prompt persistido, com texto fiel e ID único. Executar 10 por clique e 10 por Enter, separadamente.
 
-**Atualização operacional de 02/10/2026:** executar este ensaio com `extension-prompt-block-poc/` 0.5.0 e a instalação atribuída a uma pessoa. O projeto da conversa é apenas contexto observado. O [estado atual](ESTADO_ATUAL_2026-10-01.md) descreve o cadastro e a atribuição. O restante do procedimento conserva os marcadores B01/B02 originais.
+**Atualização operacional de 02/10/2026:** executar este ensaio com `obsolete/Extensão/extension-prompt-block-poc/` e a instalação atribuída a uma pessoa. O projeto da conversa é apenas contexto observado. O [estado atual](ESTADO_ATUAL_2026-10-01.md) descreve o cadastro e a atribuição. O restante do procedimento conserva os marcadores B01/B02 originais.
 
 ## 1. Preparação
 

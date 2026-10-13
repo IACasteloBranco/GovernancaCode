@@ -10,7 +10,7 @@ O Work forneceu snapshots semânticos sanitizados em `reports/evidence/DOM-ARTIF
 
 A versão 0.6.10 identifica o pacote que contém a extração específica da resposta Claude adicionada para `BUG-CLAUDE-20261006-001`. A versão aparece no manifest, no popup e nos registros `adapter_version` enviados pelo service worker e pelo observador. Esta identificação permite distinguir o código atualizado de uma extensão 0.6.9 ainda carregada; a captura correta no DOM real depende de reteste independente.
 
-Para recarregar a versão correta no Chrome: abra `chrome://extensions`, localize e remova a extensão integrada antiga; use **Carregar sem compactação** e selecione exatamente `Extensão/extension-prompt-block-poc/`; confirme **0.6.10** nos detalhes da extensão e no popup de diagnóstico; recarregue a aba do Claude; só então repita os envios por botão e Enter e confira `adapter_version` e `responses[].text` no SQLite/API. Se o registro ainda indicar 0.6.9, interrompa o reteste e verifique qual pasta foi carregada. A questão de política de CPF continua separada como `POLICY_QUESTION`.
+Para recarregar a versão correta no Chrome: abra `chrome://extensions`, localize e remova a extensão integrada antiga; use **Carregar sem compactação** e selecione exatamente `obsolete/Extensão/extension-prompt-block-poc/`; confirme **0.6.10** nos detalhes da extensão e no popup de diagnóstico; recarregue a aba do Claude; só então repita os envios por botão e Enter e confira `adapter_version` e `responses[].text` no SQLite/API. Se o registro ainda indicar 0.6.9, interrompa o reteste e verifique qual pasta foi carregada. A questão de política de CPF continua separada como `POLICY_QUESTION`.
 
 ## Correção 0.6.8 — ativação da captura no popup
 
@@ -46,7 +46,7 @@ Após relato de ausência de captura no Claude (somente eventos `blocker`), o ad
 
 O popup registra `observer: platform=claude_web editor=found|missing send=found|missing editables=N`, sem texto de prompt. O diagnóstico atualiza quando esses sinais mudam. A suíte da extensão passou em 49 testes. Para testar a correção, recarregue a extensão e a aba Claude e confira a versão 0.6.1; ainda é necessário confirmar o resultado na sessão autenticada do usuário. Não é necessário reiniciar o backend para essa correção.
 
-Implementado em `extension-prompt-block-poc/` e `backend/`. A extensão original permanece uma implementação anterior. A versão 0.6.0 adiciona Claude Web, metadados de anexos e evidências de materiais nas respostas. Não guarda bytes, base64, conteúdo extraído nem URLs de download dos arquivos.
+Implementado em `obsolete/Extensão/extension-prompt-block-poc/` e `backend/`. A extensão original permanece uma implementação anterior. A versão 0.6.0 adiciona Claude Web, metadados de anexos e evidências de materiais nas respostas. Não guarda bytes, base64, conteúdo extraído nem URLs de download dos arquivos.
 
 ## Registro
 
@@ -77,7 +77,7 @@ A identificação da pessoa, assinatura da instalação, token e política textu
 ## Atualização e validação
 
 1. Reinicie o backend com o código atualizado. A inicialização aplica a migração SQLite `0.3` automaticamente, preservando os registros existentes. Os novos campos de registros antigos começam como `unavailable`. O contrato HTTP mantém `schema_version: "0.1"`; esse número é independente da migração SQLite. Clientes antigos precisam atualizar o backend antes da extensão 0.6.0.
-2. Recarregue `extension-prompt-block-poc/` em `chrome://extensions` e recarregue as abas de ChatGPT e Claude. Confira pessoa atribuída, token e captura habilitada.
+2. Recarregue `obsolete/Extensão/extension-prompt-block-poc/` em `chrome://extensions` e recarregue as abas de ChatGPT e Claude. Confira pessoa atribuída, token e captura habilitada.
 3. Em cada plataforma, valide Enter e clique, conversa nova, resposta longa, interrupção e navegação. Compare prompt, resposta e plataforma pela API.
 4. Envie um arquivo sintético, depois remova outro antes de enviar; confirme que o segundo não aparece como enviado. Teste também anexo sem texto.
 5. Solicite um material e confira a evidência associada à resposta. Verifique nome/tipo/tamanho quando acessíveis e `presence_only` quando não forem. Envie outra pergunta e confirme que o material anterior não foi reutilizado.
@@ -85,6 +85,6 @@ A identificação da pessoa, assinatura da instalação, token e política textu
 
 Em 05/10/2026 passaram 45 testes Node, 16 testes pytest e 15 verificações em DOM real com fixtures sintéticas pelo Playwright. Incluem origem da plataforma, assinatura dos metadados, migração, idempotência, limites, rejeição de campos de conteúdo, materiais sem texto e isolamento entre respostas.
 
-Para repetir os testes DOM, sirva `extension-prompt-block-poc/` localmente e abra `/tests/files-browser.html`; o resultado deve mostrar 15 verificações e nenhum `error`. Os testes Node usam `npm.cmd test` no Windows; os do backend usam `.venv/Scripts/python.exe -m pytest -q tests`.
+Para repetir os testes DOM, sirva `obsolete/Extensão/extension-prompt-block-poc/` localmente e abra `/tests/files-browser.html`; o resultado deve mostrar 15 verificações e nenhum `error`. Os testes Node usam `npm.cmd test` no Windows; os do backend usam `.venv/Scripts/python.exe -m pytest -q tests`.
 
 A sessão de navegador disponível durante a implementação não estava autenticada no Claude. Assim, os testes com fixtures não constituem aceite da interface real; a rodada autenticada acima ainda está pendente, inclusive para os seletores de arquivos do ChatGPT.

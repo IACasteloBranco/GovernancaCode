@@ -37,7 +37,7 @@ O projeto chegou a uma POC integrada que captura prompts, avalia regras locais e
 
 ### 2.3 Investigação do fluxo de rede
 
-- Para preservar a extensão original, criamos a sonda isolada [`extension-network-poc/`](../extension-network-poc/README.md), versão **0.2.4**. Ela roda no contexto `MAIN`, observa metadados e lê uma cópia do stream, sem alterar o fluxo entregue ao ChatGPT.
+- Para preservar a extensão original, criamos a sonda isolada [`obsolete/extension-network-poc-root-compat/`](../obsolete/extension-network-poc-root-compat/README.md), versão **0.2.4**. Ela roda no contexto `MAIN`, observa metadados e lê uma cópia do stream, sem alterar o fluxo entregue ao ChatGPT.
 - Os testes de 25/09 identificaram `POST /backend-api/:id/conversation` via `fetch`, resposta HTTP 200 com `text/event-stream`. O evento `fetch end` indicava apenas a chegada dos cabeçalhos. Em dois envios, a sonda observou `[DONE]` (`protocolDone=1`), seguido por `AbortError` na cópia do stream. Também observou eventos `delta` e campos estruturais ligados a `content/parts`.
 - Isso estabeleceu um candidato a sinal de fim do protocolo, mas **não** estabeleceu o conteúdo completo nem uma relação determinística `Prompt N → Response N`. A **POC A (Mirror Mode)** de reconstrução e comparação com o DOM ficou pendente. A **POC B (Buffered Mode)** de retenção/liberação não foi implementada. A investigação de resposta foi pausada por decisão do usuário para priorizar o bloqueio de prompts.
 - A sonda limita seus diagnósticos a metadados locais; não grava cookies, headers de autorização, token, texto de prompt ou resposta.

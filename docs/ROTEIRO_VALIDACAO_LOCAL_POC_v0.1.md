@@ -25,7 +25,7 @@ Na versão integrada 0.5.0, a avaliação anterior ao envio e o bloqueio por pro
 
 - Usar uma conta do ChatGPT e conversas/projetos reservados ao laboratório. Os prompts e respostas esperadas devem ser sintéticos.
 - Iniciar o backend local e conferir `/health`; confirmar `schema_version=0.1`.
-- Carregar `extension-prompt-block-poc/` descompactada e conferir versão 0.5.0. Informar o token de `backend/.env`, cadastrar a instalação, atribuí-la a uma pessoa com `assign_machine.py` e atualizar o vínculo no popup. Só então habilitar e salvar a captura.
+- Carregar `obsolete/Extensão/extension-prompt-block-poc/` descompactada e conferir a versão candidata indicada no manifesto. Informar o token de `backend/.env`, cadastrar a instalação, atribuí-la a uma pessoa com `assign_machine.py` e atualizar o vínculo no popup. Só então habilitar e salvar a captura.
 - Conferir no popup pessoa, prefixo da chave e **Captura: habilitada**. O código da instalação sozinho não comprova atribuição. A política textual continua ativa em todos os chats.
 - Recarregar as abas do ChatGPT após atualizar a extensão; confirmar que o popup registra eventos da versão atual.
 - Registrar versão do Chrome, data/hora, revisão do código e versão do adapter. Fazer uma interação curta inicial para verificar conectividade e token.

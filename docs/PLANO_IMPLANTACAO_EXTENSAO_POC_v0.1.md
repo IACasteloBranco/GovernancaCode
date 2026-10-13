@@ -5,7 +5,7 @@
 **Status:** plano inicial preservado como histórico; a versão integrada 0.5.0 foi implementada e aguarda validação ponta a ponta no navegador.  
 **Base:** [Especificação da POC](../POC_EXTENSAO_BACKEND_GOVERNANCA_IA_v0.1.md) e [plano do backend](PLANO_IMPLANTACAO_BACKEND_POC_v0.1.md).
 
-Para o fluxo atual de cadastro, atribuição e captura, consulte o [estado atual](ESTADO_ATUAL_2026-10-01.md) e o [guia da extensão integrada](../extension-prompt-block-poc/README.md).
+Para o fluxo atual de cadastro, atribuição e captura, consulte o [estado atual](ESTADO_ATUAL_2026-10-01.md) e o [guia da extensão integrada](../extension/README.md).
 
 ## 1. Objetivo
 

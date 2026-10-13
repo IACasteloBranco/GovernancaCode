@@ -2,7 +2,7 @@ import base64
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 os.environ.setdefault("LAB_API_TOKEN", "synthetic-test-token-not-for-real-use-0001")
@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 from fastapi.testclient import TestClient
 
-from app.db import connect, iso, utc_now
+from app.db import clean_expired, connect, iso, utc_now
 from app.main import app
 from app.settings import get_settings
 from assign_machine import main as assign_machine
@@ -82,11 +82,11 @@ def test_machine_signature_allows_any_project_after_person_assignment(client):
     assert signed_post(client, route, prompt_payload(machine_id), machine_id, private).status_code == 403
     with connect(get_settings()) as db:
         db.execute("UPDATE machines SET person_name = ?, assigned_at = ? WHERE installation_id = ?",
-                   ("EDUARDO", iso(utc_now()), str(machine_id)))
+                   ("PESSOA-SINTETICA", iso(utc_now()), str(machine_id)))
     accepted = signed_post(client, route, prompt_payload(machine_id), machine_id, private)
     assert accepted.status_code == 201
     detail = client.get(f"/v1/interactions/{accepted.json()['interaction_id']}", headers=AUTH).json()
-    assert detail["attributed_person"] == "EDUARDO"
+    assert detail["attributed_person"] == "PESSOA-SINTETICA"
     assert detail["project_id"] == PROJECT
     assert detail["machine_key_fingerprint"] == enrolled.json()["key_fingerprint"]
     other = signed_post(client, route, prompt_payload(machine_id, "g-p-other"), machine_id, private)
@@ -105,6 +105,73 @@ def test_machine_signature_allows_any_project_after_person_assignment(client):
     assert signed_post(client, response_path, answer, machine_id, private).status_code == 201
 
 
+def test_stream_capture_stores_metadata_with_assigned_machine_and_rejects_content(client):
+    machine_id = uuid4()
+    private, public = key_material()
+    registered = client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": public}, headers=AUTH)
+    assert registered.status_code == 200
+
+    payload = {
+        "capture_id": str(uuid4()), "device_installation_id": str(machine_id),
+        "platform": "chatgpt_web", "path": "/backend-api/f/conversation", "request_id": 19,
+        "status_code": 200, "content_type": "text/event-stream", "capture_status": "complete",
+        "response_chars": 24, "bytes": 180, "chunks": 4, "frames": 3, "done_markers": 1,
+        "protocol_done": True, "reader_done": True, "reader_aborted_after_done": False,
+        "truncated": False, "stream_elapsed_ms": 750, "event_types": ["message", "done"],
+        "event_shapes": ["type=data"], "event_sequence": ["message", "done"],
+        "observed_at": datetime.now(timezone.utc).isoformat(), "adapter_version": "0.3.0",
+    }
+    route = "/v1/stream-captures"
+    assert signed_post(client, route, payload, machine_id, private).status_code == 403
+    with connect(get_settings()) as db:
+        db.execute("UPDATE machines SET person_name = ?, assigned_at = ? WHERE installation_id = ?",
+                   ("PESSOA-SINTETICA", iso(utc_now()), str(machine_id)))
+    accepted = signed_post(client, route, payload, machine_id, private)
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["attributed_person"] == "PESSOA-SINTETICA"
+    assert signed_post(client, route, payload, machine_id, private).status_code == 200
+    with connect(get_settings()) as db:
+        row = db.execute("SELECT * FROM stream_captures WHERE capture_id = ?", (payload["capture_id"],)).fetchone()
+        columns = {item["name"] for item in db.execute("PRAGMA table_info(stream_captures)")}
+    assert row["attributed_person"] == "PESSOA-SINTETICA"
+    assert row["response_chars"] == 24
+    assert "response_text" not in columns and "prompt_text" not in columns
+
+    content_payload = {**payload, "capture_id": str(uuid4()), "response_text": "synthetic content"}
+    assert signed_post(client, route, content_payload, machine_id, private).status_code == 422
+    expired = iso(utc_now() - timedelta(days=8))
+    with connect(get_settings()) as db:
+        db.execute("UPDATE stream_captures SET received_at = ? WHERE capture_id = ?", (expired, payload["capture_id"]))
+    clean_expired(get_settings())
+    with connect(get_settings()) as db:
+        assert db.execute("SELECT count(*) FROM stream_captures WHERE capture_id = ?", (payload["capture_id"],)).fetchone()[0] == 0
+
+
+def test_artifact_metadata_is_tied_to_machine_assignment(client):
+    machine_id = uuid4()
+    private, public = key_material()
+    client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": public}, headers=AUTH)
+    with connect(get_settings()) as db:
+        db.execute("UPDATE machines SET person_name = ?, assigned_at = ? WHERE installation_id = ?",
+                   ("PESSOA-SINTETICA", iso(utc_now()), str(machine_id)))
+    payload = {"artifact_id": str(uuid4()), "device_installation_id": str(machine_id),
+               "platform": "chatgpt_web", "source": "download_headers", "file_name": "synthetic.pdf",
+               "mime_type": "application/pdf", "size_bytes": 1024,
+               "observed_at": datetime.now(timezone.utc).isoformat()}
+    accepted = signed_post(client, "/v1/artifact-metadata", payload, machine_id, private)
+    assert accepted.status_code == 201
+    assert accepted.json()["attributed_person"] == "PESSOA-SINTETICA"
+    assert client.post("/v1/artifact-metadata", json=payload, headers=AUTH).status_code == 401
+    with_content = {**payload, "artifact_id": str(uuid4()), "response_text": "synthetic content"}
+    assert signed_post(client, "/v1/artifact-metadata", with_content, machine_id, private).status_code == 422
+    expired = iso(utc_now() - timedelta(days=8))
+    with connect(get_settings()) as db:
+        db.execute("UPDATE artifact_metadata SET received_at = ? WHERE artifact_id = ?", (expired, payload["artifact_id"]))
+    clean_expired(get_settings())
+    with connect(get_settings()) as db:
+        assert db.execute("SELECT count(*) FROM artifact_metadata WHERE artifact_id = ?", (payload["artifact_id"],)).fetchone()[0] == 0
+
+
 def test_replay_and_changed_key_are_rejected(client):
     machine_id = uuid4()
     private, public = key_material()
@@ -114,7 +181,7 @@ def test_replay_and_changed_key_are_rejected(client):
                        headers=AUTH).status_code == 409
     with connect(get_settings()) as db:
         db.execute("UPDATE machines SET person_name = ? WHERE installation_id = ?",
-                   ("EDUARDO", str(machine_id)))
+                   ("PESSOA-SINTETICA", str(machine_id)))
     payload = prompt_payload(machine_id)
     nonce = str(uuid4())
     first = signed_post(client, "/v1/interactions", payload, machine_id, private, nonce)
@@ -133,13 +200,13 @@ def test_operator_assignment_requires_matching_key_fingerprint(client, monkeypat
     _, public = key_material()
     registered = client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": public},
                              headers=AUTH).json()
-    monkeypatch.setattr("sys.argv", ["assign_machine.py", str(machine_id), "EDUARDO",
+    monkeypatch.setattr("sys.argv", ["assign_machine.py", str(machine_id), "PESSOA-SINTETICA",
                                     "--fingerprint-prefix", "0000000000000000"])
     with pytest.raises(SystemExit):
         assign_machine()
     assert client.get(f"/v1/machines/{machine_id}", headers=AUTH).json()["person_name"] is None
-    monkeypatch.setattr("sys.argv", ["assign_machine.py", str(machine_id), "EDUARDO",
+    monkeypatch.setattr("sys.argv", ["assign_machine.py", str(machine_id), "PESSOA-SINTETICA",
                                     "--fingerprint-prefix", registered["key_fingerprint"][:16]])
     assign_machine()
-    assert client.get(f"/v1/machines/{machine_id}", headers=AUTH).json()["person_name"] == "EDUARDO"
+    assert client.get(f"/v1/machines/{machine_id}", headers=AUTH).json()["person_name"] == "PESSOA-SINTETICA"
     assert client.get(f"/v1/machines/{machine_id}", headers=AUTH).json()["project_id"] is None

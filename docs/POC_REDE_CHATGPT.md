@@ -12,7 +12,7 @@
 
 ## 1. Diagnóstico da extensão existente
 
-- `extension/` permanece como implementação estável. `extension-network-poc/` é uma cópia isolada para o experimento.
+- `obsolete/Extensão/extension/` preserva a implementação legada. `obsolete/Extensão/extension-network-poc/` é a cópia isolada para o experimento.
 - Manifest V3, versão inicial copiada `0.1.11`, injeta `src/content/observer.js` em `https://chatgpt.com/*` no mundo isolado e em `document_idle`. Permissões: `storage` e acesso ao backend local `http://127.0.0.1/*`.
 - O observador captura o prompt ao detectar clique, Enter ou `submit`. Ele consulta `status` no service worker, envia o prompt ao backend e recebe `interaction_id`.
 - A resposta atual é lida do DOM por `setInterval` a cada 500 ms, usando atributos de papel e conteúdo, com estados `complete`, `incomplete` e `capture_failed`. **Não há `MutationObserver` na implementação atual.** O sinal de streaming depende de um seletor de botão e pode faltar em variantes da interface.
@@ -62,7 +62,7 @@ Registrar para cada caso: versão do Chrome, modo Chat/Work, horário, ID local 
 
 ## 6. Implementação experimental 0.3.0 (2026-10-07)
 
-A pasta isolada `Extensão/extension-network-poc/` agora contém uma tentativa de espelhamento e reconstrução para `text/event-stream`, além dos módulos de bloqueio/política copiados da candidata integrada. O parser aceita somente snapshots de texto do assistente com estado terminal reconhecido e exatamente um `[DONE]`. A extensão compara o texto candidato com o DOM e só usa o valor de rede no envio ao backend local quando há igualdade e nenhuma ambiguidade; caso contrário, usa o snapshot DOM existente. A resposta continua sendo entregue uma vez por interação.
+A pasta isolada `obsolete/Extensão/extension-network-poc/` agora contém uma tentativa de espelhamento e reconstrução para `text/event-stream`, além dos módulos de bloqueio/política copiados da candidata integrada. O parser aceita somente snapshots de texto do assistente com estado terminal reconhecido e exatamente um `[DONE]`. A extensão compara o texto candidato com o DOM e só usa o valor de rede no envio ao backend local quando há igualdade e nenhuma ambiguidade; caso contrário, usa o snapshot DOM existente. A resposta continua sendo entregue uma vez por interação.
 
 Isso é uma implementação experimental da POC A, não uma validação do protocolo nem autorização para substituir a captura DOM. O ensaio CDP de 2026-10-07 confirmou apenas o stream do site; a aba não tinha marcador da extensão e sua versão não foi confirmada. O Work precisa carregar e identificar a `0.3.0`, validar bloqueio, correlação, igualdade e persistência. Regeneração, ferramentas e requisições concorrentes continuam sem correlação causal demonstrada. POC B / Buffered Mode continua fora do escopo.
 

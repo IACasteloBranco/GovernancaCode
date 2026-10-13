@@ -4,14 +4,16 @@ Este documento registra o estado verificado no código e no banco local em 01/10
 
 **Atualização de 02/10/2026:** a instalação agora é atribuída somente à pessoa. O projeto é contexto observado quando aparece na URL e não bloqueia o envio em outros chats. Os procedimentos abaixo foram ajustados para esse fluxo; os números históricos desta seção continuam referentes a 01/10.
 
-## Componentes em uso
+**Estrutura ativa em 13/10/2026:** o backend principal fica em `backend/` e a extensão de captura de stream 0.3.0 fica em `extension/`. As versões anteriores estão em `obsolete/`. Carregue somente `extension/` no Chrome e siga o [guia da extensão ativa](../extension/README.md). Como a pasta mudou, o Chrome gera outro ID para a instalação unpacked; cadastre e atribua a nova instalação.
+
+## Componentes registrados em 01/10/2026
 
 | Componente | Estado verificado |
 | --- | --- |
 | Backend | API FastAPI local em `backend/`, esquema SQLite 0.2, autenticação por `LAB_API_TOKEN`, cadastro de instalação e validação de assinatura ECDSA P-256 quando `MACHINE_SIGNATURE_REQUIRED=true`. |
-| Extensão integrada | `extension-prompt-block-poc/`, versão 0.5.0. Avalia texto antes do envio, aplica regras e bloqueio manual, vincula a instalação a um projeto e observa prompts e respostas na página. |
-| Extensão original | `extension/`, versão 0.1.11, mantida separadamente. Não contém o fluxo de vínculo por pessoa/projeto da versão integrada. |
-| Sonda de rede | `extension-network-poc/`, experimental. Ainda não reconstrói nem correlaciona com confiança o texto final da resposta. |
+| Extensão integrada (registro de 01/10) | `obsolete/Extensão/extension-prompt-block-poc/`, versão 0.5.0 naquela data. A versão atual está indicada no mapa de pastas acima. |
+| Extensão original | `obsolete/Extensão/extension/`, versão 0.1.11, mantida separadamente. Não contém o fluxo de vínculo por pessoa/projeto da versão integrada. |
+| Sonda de rede | `obsolete/Extensão/extension-network-poc/`, versão experimental. Consulte o mapa acima para a versão atual. |
 
 ## Evidências e limites
 
@@ -21,28 +23,9 @@ Este documento registra o estado verificado no código e no banco local em 01/10
 - A captura de respostas pelo DOM continua experimental. Anexos não são observados; a extensão envia `attachments: []`. Não há fila offline nem reenvio automático.
 - Ainda falta uma prova ponta a ponta, na versão 0.5.0, de instalação atribuída, envio em chats diferentes, persistência de prompt assinado e associação fiel da resposta. Não declarar a rastreabilidade `pessoa → contexto de projeto observado → prompt → resposta` como concluída.
 
-## Como concluir o vínculo e ativar a captura
+## Ativação atual
 
-1. Inicie o backend a partir de `backend/` no PowerShell:
-
-   ```powershell
-   .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-   ```
-
-   Confira `http://127.0.0.1:8000/health`. O endpoint confirma disponibilidade, mas não valida o token.
-2. Em `chrome://extensions`, carregue **extension-prompt-block-poc/**. No popup, informe a conta declarada e o mesmo `LAB_API_TOKEN` do `backend/.env`; salve. O token permanece apenas na sessão da extensão e pode precisar ser informado novamente após reiniciar o navegador.
-3. Clique **Cadastrar ou atualizar vínculo**. Anote o **Código da instalação** e os 16 primeiros caracteres da impressão digital da chave exibidos no popup. Confira que o cadastro foi aceito.
-4. Um operador, na pasta `backend/`, associa a instalação à pessoa. Confira os valores antes de executar:
-
-   ```powershell
-   .\.venv\Scripts\python.exe assign_machine.py "CODIGO_DA_INSTALACAO" "NOME" --fingerprint-prefix "16_CARACTERES_DA_CHAVE"
-   ```
-
-5. Clique novamente **Cadastrar ou atualizar vínculo**. O popup deve mostrar pessoa e prefixo da chave. Recarregue a aba do ChatGPT, marque **Habilitar captura observacional** e clique **Salvar configuração** com o token preenchido. A caixa pode estar marcada no armazenamento local e ainda aparecer desmarcada no popup enquanto faltarem token ou atribuição.
-6. Faça um envio curto com texto fictício. Confira **Entregas recentes** e consulte o `interaction_id` confirmado na API. Registre também as falhas; um `HTTP 200` de `/health` não comprova a captura.
-
-Não copie o token para documentos, prints ou o CSV de evidências. Não use conteúdo de clientes nesta POC.
-
+Use o guia da [extensão ativa](../extension/README.md) para carregar o pacote 0.3.0, cadastrar a instalação, atribuí-la a uma pessoa e executar ensaios sintéticos. As instruções detalhadas abaixo desta seção pertenciam à versão anterior e foram substituídas.
 ## Próxima validação
 
 Execute o [roteiro local](ROTEIRO_VALIDACAO_LOCAL_POC_v0.1.md) com a versão 0.5.0. Registre separadamente falhas de token (`401`), atribuição pendente, bloqueio por política e falha de captura. Depois compare cada prompt e resposta persistidos com o conteúdo visível no navegador. A pesquisa de captura pela rede e a retenção/liberação da resposta permanecem etapas futuras.

@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 from .settings import Settings
 
-SCHEMA_VERSION = "0.3"
+SCHEMA_VERSION = "0.4"
 
 
 def utc_now() -> datetime:
@@ -86,6 +86,50 @@ def initialize(settings: Settings) -> None:
                 occurred_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_capture_events_interaction ON capture_events(interaction_id, occurred_at);
+            CREATE TABLE IF NOT EXISTS stream_captures (
+                capture_id TEXT PRIMARY KEY,
+                request_fingerprint TEXT NOT NULL,
+                device_installation_id TEXT NOT NULL REFERENCES machines(installation_id),
+                attributed_person TEXT NOT NULL,
+                machine_key_fingerprint TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                path TEXT NOT NULL,
+                request_id INTEGER NOT NULL,
+                status_code INTEGER NOT NULL,
+                content_type TEXT NOT NULL,
+                capture_status TEXT NOT NULL,
+                response_chars INTEGER NOT NULL,
+                bytes INTEGER NOT NULL,
+                chunks INTEGER NOT NULL,
+                frames INTEGER NOT NULL,
+                done_markers INTEGER NOT NULL,
+                protocol_done INTEGER NOT NULL,
+                reader_done INTEGER NOT NULL,
+                reader_aborted_after_done INTEGER NOT NULL,
+                truncated INTEGER NOT NULL,
+                stream_elapsed_ms INTEGER NOT NULL,
+                event_types_json TEXT NOT NULL,
+                event_shapes_json TEXT NOT NULL,
+                event_sequence_json TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                received_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_stream_captures_received_at ON stream_captures(received_at);
+            CREATE TABLE IF NOT EXISTS artifact_metadata (
+                artifact_id TEXT PRIMARY KEY,
+                request_fingerprint TEXT NOT NULL,
+                device_installation_id TEXT NOT NULL REFERENCES machines(installation_id),
+                attributed_person TEXT NOT NULL,
+                machine_key_fingerprint TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                source TEXT NOT NULL,
+                file_name TEXT,
+                mime_type TEXT,
+                size_bytes INTEGER,
+                observed_at TEXT NOT NULL,
+                received_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_artifact_metadata_received_at ON artifact_metadata(received_at);
             CREATE TABLE IF NOT EXISTS machines (
                 installation_id TEXT PRIMARY KEY,
                 public_key_json TEXT NOT NULL,
@@ -118,6 +162,7 @@ def initialize(settings: Settings) -> None:
         if "generated_materials_json" not in response_columns:
             db.execute("ALTER TABLE responses ADD COLUMN generated_materials_json TEXT NOT NULL DEFAULT '{\"capture_status\":\"unavailable\",\"items\":[],\"truncated\":false}'")
         db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.3', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.4', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
 
 
 def json_dump(value: Any) -> str:
@@ -129,6 +174,14 @@ def clean_expired(settings: Settings) -> int:
         db.execute("DELETE FROM machine_nonces WHERE expires_at <= ?", (iso(utc_now()),))
         cursor = db.execute(
             "DELETE FROM interactions WHERE julianday(received_at) < julianday('now', ?)",
+            (f"-{settings.retention_days} days",),
+        )
+        db.execute(
+            "DELETE FROM stream_captures WHERE julianday(received_at) < julianday('now', ?)",
+            (f"-{settings.retention_days} days",),
+        )
+        db.execute(
+            "DELETE FROM artifact_metadata WHERE julianday(received_at) < julianday('now', ?)",
             (f"-{settings.retention_days} days",),
         )
         return cursor.rowcount
