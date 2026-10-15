@@ -6,7 +6,7 @@ test('o pacote limita a injeção ao ChatGPT e usa a API local de identidade', a
   const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url)));
   assert.equal(manifest.manifest_version, 3);
   assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*', 'http://127.0.0.1:8000/*']);
-  assert.equal(manifest.version, '0.4.4');
+  assert.equal(manifest.version, '0.4.6');
   assert.deepEqual(manifest.permissions, ['storage', 'tabs']);
   assert.deepEqual(manifest.content_scripts.map(script => [script.world, script.run_at]), [
     ['MAIN', 'document_start'], ['ISOLATED', 'document_start']

@@ -11,7 +11,8 @@ const interactionId = '00000000-0000-4000-8000-000000000099';
 const turnKey = '00000000-0000-4000-8000-000000000020';
 let serial = 0;
 
-function createObserver({attrs = new Map(), sent = [], sendMessage, promptText = `  ${prompt} \n`} = {}) {
+function createObserver({attrs = new Map(), sent = [], sendMessage, promptText = `  ${prompt} \n`,
+  pathname = '/g/g-p-123/c/00000000-0000-4000-8000-000000000030'} = {}) {
   const listeners = new Map();
   const warnings = [];
   const field = {innerText: promptText};
@@ -27,7 +28,7 @@ function createObserver({attrs = new Map(), sent = [], sendMessage, promptText =
   }}};
   const context = {window, chrome, document: {documentElement: root,
     querySelectorAll: selector => selector.includes('data-turn-key') ? [turn] : [field]},
-  location: {origin: 'https://chatgpt.com', pathname: '/g/g-p-123/c/00000000-0000-4000-8000-000000000030'},
+  location: {origin: 'https://chatgpt.com', pathname},
   crypto: {randomUUID: () => `00000000-0000-4000-8000-${String(++serial).padStart(12, '0')}`,
     subtle: webcrypto.subtle}, TextEncoder, Uint8Array, Date, Map, URL,
   console: {warn: (...items) => warnings.push(items)}};
@@ -36,12 +37,24 @@ function createObserver({attrs = new Map(), sent = [], sendMessage, promptText =
   return {attrs, listeners, sent, context, warnings};
 }
 
+test('records a new chat without a conversation URL until its ID is observed', () => {
+  const observer = createObserver({pathname: '/'});
+  observer.context.GovernancaCaptureAttempt();
+  assert.deepEqual(JSON.parse(JSON.stringify(observer.sent[0].payload.conversation)), {
+    capture_status: 'unknown', reason: 'ID da conversa indisponível no momento do envio'
+  });
+});
+
 test('stores prompt and response together and restores a turn link after reload', async () => {
   const first = createObserver();
   first.context.GovernancaCaptureAttempt();
   const attemptId = first.attrs.get('data-governanca-probe-attempt');
   assert.equal(first.attrs.get('data-governanca-prompt-capture'), 'pending');
   assert.equal(first.sent[0].payload.prompt.text, `  ${prompt} \n`);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.sent[0].payload.conversation)), {
+    url: 'https://chatgpt.com/g/g-p-123/c/00000000-0000-4000-8000-000000000030',
+    capture_status: 'observed'
+  });
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(first.attrs.get('data-governanca-prompt-capture'), 'stored');
   first.listeners.get('governanca-ai-network-capture')({detail: {

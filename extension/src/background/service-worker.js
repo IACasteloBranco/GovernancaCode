@@ -256,7 +256,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
           (!item.prompt.text && !(item.attachments_capture_status === 'observed' && item.attachments.length)) ||
           item.prompt.text.length > 100_000 ||
           (() => { try { return new URL(item.conversation?.url).origin !== CHATGPT_ORIGIN; }
-            catch { return true; } })() || item.adapter_version !== '0.4.4')
+            catch { return true; } })() || item.adapter_version !== '0.4.6')
         throw new Error('INVALID_PROMPT');
       const {installationId} = await chrome.storage.local.get('installationId');
       const saved = await sendToApi('/v1/interactions', {method: 'POST', body: JSON.stringify({...item,
@@ -271,7 +271,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (enabled !== true || !/^[0-9a-f-]{36}$/i.test(message.interactionId || '') ||
           !item || !/^[0-9a-f-]{36}$/i.test(item.client_event_id || '') ||
           typeof item.text !== 'string' || !item.text || item.text.length > 100_000 ||
-          !['complete', 'incomplete'].includes(item.capture_status) || item.adapter_version !== '0.4.4')
+          !['complete', 'incomplete'].includes(item.capture_status) || item.adapter_version !== '0.4.6')
         throw new Error('Resposta inválida ou captura pausada.');
       const saved = await sendToApi(`/v1/interactions/${message.interactionId}/response`,
         {method: 'POST', body: JSON.stringify(item)});

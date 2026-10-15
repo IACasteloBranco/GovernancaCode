@@ -97,7 +97,7 @@ Gerar `device_installation_id` uma única vez por instalação e guardá-lo em `
 
 Na tentativa de envio, congelar o contexto de origem: aba/documento, conversa, projeto, horário, texto e UUID do evento. Não usar o projeto anterior como fallback. Contexto desconhecido exige `capture_status=unknown` ou `unavailable` e `reason`, conforme o backend atual.
 
-Uma conversa nova pode ainda não ter URL definitiva. Registrar o que estava visível naquele instante e manter a correlação local se a página receber uma URL depois. O contrato atual não tem endpoint para corrigir retroativamente o contexto; não inventar um identificador para preencher essa lacuna.
+Uma conversa nova pode ainda não ter URL definitiva. Nesse caso, registrar a conversa como `unknown`, com motivo, sem usar a URL raiz como `conversation.url`. Manter a correlação local se a página receber uma URL depois. O contrato atual não tem endpoint para corrigir retroativamente o contexto; não inventar um identificador para preencher essa lacuna.
 
 ### Prompt
 

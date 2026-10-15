@@ -31,6 +31,7 @@ Depois de recarregar a extensão, envie um prompt sintético e compare o texto v
 
 ## Limites
 
+- No primeiro envio de uma conversa nova, `conversation` fica `unknown` quando a rota ainda não contém o ID. A análise por conversa não inclui esse envio. A extensão não atualiza esse campo depois que a URL muda.
 - O protocolo privado do ChatGPT pode mudar. Patches de texto não reconhecidos e estados terminais ambíguos devem ficar incompletos.
 - O texto parcial de uma resposta interrompida pode ser gravado com status `incomplete`.
 - A correlação depende da aba ativa e do primeiro POST de conversa após a liberação. Recarregar a aba durante uma resposta encerra a tentativa sem entrega confirmada.

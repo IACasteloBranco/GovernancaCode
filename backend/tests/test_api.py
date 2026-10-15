@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -86,6 +87,24 @@ def test_interaction_is_persisted_idempotently_and_conflicts_on_changed_payload(
     detail = client.get(f"/v1/interactions/{first.json()['interaction_id']}", headers=AUTH)
     assert detail.status_code == 200
     assert detail.json()["prompt"]["text"] == "Synthetic test prompt"
+
+def test_new_chat_persists_unknown_conversation_without_root_url(client):
+    payload = interaction_payload()
+    payload["conversation"] = {
+        "capture_status": "unknown",
+        "reason": "ID da conversa indisponível no momento do envio",
+    }
+
+    created = client.post("/v1/interactions", json=payload, headers=AUTH)
+    assert created.status_code == 201
+    with connect(get_settings()) as db:
+        row = db.execute("SELECT conversation_json FROM interactions WHERE interaction_id = ?",
+                         (created.json()["interaction_id"],)).fetchone()
+    assert json.loads(row["conversation_json"]) == {
+        "name": None, "url": None, "capture_status": "unknown",
+        "reason": "ID da conversa indisponível no momento do envio",
+    }
+
 
 
 def test_response_capture_is_idempotent_and_attached_to_correct_interaction(client):

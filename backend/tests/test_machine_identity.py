@@ -26,7 +26,10 @@ PROJECT = "g-p-6abacc4edb1c81918be5e01d0038640a"
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_API_TOKEN", TOKEN)
+    monkeypatch.setenv("CAPTURE_API_TOKEN", TOKEN)
+    monkeypatch.setenv("OPERATOR_READ_TOKEN", "synthetic-operator-token-not-for-real-use-0002")
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "machine.sqlite3"))
+    monkeypatch.setenv("RETENTION_DAYS", "7")
     monkeypatch.setenv("MACHINE_SIGNATURE_REQUIRED", "true")
     get_settings.cache_clear()
     with TestClient(app) as test_client:

@@ -43,6 +43,10 @@
     if ((!text.trim() && !hasAttachments) || text.length > 100_000) return;
     const observedAt = new Date().toISOString();
     const url = location.origin + location.pathname;
+    const conversationMatch = location.pathname.match(/^\/(?:g\/[a-zA-Z0-9-]+\/)?c\/([^/]+)\/?$/);
+    const conversation = conversationMatch && UUID.test(conversationMatch[1])
+      ? {url, capture_status: 'observed'}
+      : {capture_status: 'unknown', reason: 'ID da conversa indisponível no momento do envio'};
     const project = /^\/g\/g-p-[a-zA-Z0-9]+(?:\/|$)/.test(location.pathname)
       ? {url, capture_status: 'observed'}
       : {capture_status: 'unknown', reason: 'Projeto não identificado na URL'};
@@ -54,11 +58,11 @@
     if (recent.length > 8) recent.shift();
     state.interaction = send({type: 'capture_prompt', payload: {
       schema_version: '0.1', client_event_id: attemptId, platform: 'chatgpt_web',
-      project, conversation: {url, capture_status: 'observed'},
+      project, conversation,
       prompt: {text, capture_status: 'observed'},
       attachments: observation.items || [], attachments_capture_status: observation.capture_status,
       attachments_truncated: observation.truncated === true,
-      adapter_version: '0.4.4', observed_at: observedAt
+      adapter_version: '0.4.6', observed_at: observedAt
     }}).then(result => {
       document.documentElement.setAttribute(promptCaptureAttribute, 'stored');
       globalThis.GovernancaFiles?.consume?.(observation);
@@ -98,7 +102,7 @@
     state.delivered = true;
     void state.interaction.then(interactionId => send({type: 'capture_response', interactionId,
       payload: {client_event_id: attemptId, text, capture_status: captureStatus,
-        observed_at: new Date().toISOString(), adapter_version: '0.4.4'}
+        observed_at: new Date().toISOString(), adapter_version: '0.4.6'}
     })).then(async () => {
       state.confirmed = true;
       state.conversationUrl = location.origin + location.pathname;
