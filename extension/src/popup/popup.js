@@ -15,9 +15,11 @@ async function refresh() {
   $('artifacts').textContent = config.lastArtifacts.length
     ? config.lastArtifacts.slice().reverse().map(item => {
       const name = item.file_name || 'nome não informado';
-      const type = item.file_type || 'tipo desconhecido';
+      const type = item.mime_type || 'tipo desconhecido';
       const size = Number.isSafeInteger(item.size_bytes) ? `${item.size_bytes} B` : 'tamanho não informado';
-      return `${item.observed_at}  ${name}  ${type}  ${size}  origem=${item.source}/${item.type_source || 'unknown'}`;
+      const conversation = item.conversation_context?.conversation_id
+        ? ` conversa=${item.conversation_context.conversation_id} (rota ativa)` : '';
+      return `${item.observed_at}  ${name}  ${type}  ${size}  origem=${item.source}${conversation}`;
     }).join('\n')
     : 'Nenhum metadado de arquivo ainda.';
   $('diagnostics').textContent = config.captureDiagnostics.length

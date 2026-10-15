@@ -11,6 +11,20 @@ const ready = (async () => {
 
 const hex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
 
+function captureErrorCode(error) {
+  const message = String(error?.message || '');
+  const status = message.match(/^HTTP (\d{3})\b/)?.[1];
+  if (status) return `http_${status}`;
+  if (message === 'CAPTURE_PAUSED') return 'capture_paused';
+  if (message === 'INVALID_PROMPT') return 'invalid_prompt';
+  return 'internal_error';
+}
+
+function isChatPage(sender) {
+  try { return Boolean(sender.tab) && sender.frameId === 0 && new URL(sender.url).origin === CHATGPT_ORIGIN; }
+  catch { return false; }
+}
+
 function validAttachmentObservation(item) {
   if (!Array.isArray(item?.attachments) || item.attachments.length > 20 ||
       !['observed', 'not_observed', 'unavailable'].includes(item.attachments_capture_status) ||
@@ -26,6 +40,7 @@ function validAttachmentObservation(item) {
           !/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(file.mime_type))) ||
         (file.size_bytes !== null && (!Number.isSafeInteger(file.size_bytes) || file.size_bytes < 0))) return false;
     const hasMetadata = file.name !== null || file.mime_type !== null || file.size_bytes !== null;
+    if (file.association_status !== undefined && file.association_status !== 'ambiguous') return false;
     return file.capture_status === 'presence_only' ? !hasMetadata : hasMetadata;
   });
 }
@@ -132,7 +147,14 @@ async function status() {
 
 async function recordDiagnostic(stage, details = {}) {
   const {captureDiagnostics = []} = await chrome.storage.local.get('captureDiagnostics');
-  captureDiagnostics.push({stage, at: new Date().toISOString(), ...details});
+  const diagnostic = {stage, at: new Date().toISOString(), ...details};
+  if (stage === 'blocker_health') {
+    const retained = captureDiagnostics.filter(item => item.stage !== 'blocker_health').slice(-29);
+    retained.push(diagnostic);
+    await chrome.storage.local.set({captureDiagnostics: retained});
+    return;
+  }
+  captureDiagnostics.push(diagnostic);
   await chrome.storage.local.set({captureDiagnostics: captureDiagnostics.slice(-30)});
 }
 
@@ -170,9 +192,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   (async () => {
     await ready;
     const popup = sender.url === chrome.runtime.getURL('src/popup/popup.html');
-    const page = sender.tab && sender.frameId === 0 && (() => {
-      try { return new URL(sender.url).origin === CHATGPT_ORIGIN; } catch { return false; }
-    })();
+    const page = isChatPage(sender);
 
     if (popup && message.type === 'status') return status();
     if (popup && message.type === 'save') {
@@ -229,14 +249,15 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (page && message.type === 'capture_prompt') {
       const {enabled} = await chrome.storage.local.get('enabled');
       const item = message.payload;
-      if (enabled !== true || !item || item.platform !== 'chatgpt_web' ||
+      if (enabled !== true) throw new Error('CAPTURE_PAUSED');
+      if (!item || item.platform !== 'chatgpt_web' ||
           !/^[0-9a-f-]{36}$/i.test(item.client_event_id || '') ||
           typeof item.prompt?.text !== 'string' || !validAttachmentObservation(item) ||
           (!item.prompt.text && !(item.attachments_capture_status === 'observed' && item.attachments.length)) ||
           item.prompt.text.length > 100_000 ||
           (() => { try { return new URL(item.conversation?.url).origin !== CHATGPT_ORIGIN; }
             catch { return true; } })() || item.adapter_version !== '0.4.4')
-        throw new Error('Prompt inválido ou captura pausada.');
+        throw new Error('INVALID_PROMPT');
       const {installationId} = await chrome.storage.local.get('installationId');
       const saved = await sendToApi('/v1/interactions', {method: 'POST', body: JSON.stringify({...item,
         device_installation_id: installationId})});
@@ -264,12 +285,16 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (config.enabled !== true) throw new Error('Captura pausada na extensão.');
       const item = message.payload;
       if (!item || typeof item.artifact_id !== 'string' || item.platform !== 'chatgpt_web' ||
-          !['metadata_json', 'download_headers'].includes(item.source) ||
+          item.source !== 'download_headers' ||
           (item.file_name !== null && (typeof item.file_name !== 'string' || !item.file_name || item.file_name.length > 255 ||
             /[\\/\u0000-\u001f\u007f]/.test(item.file_name))) ||
           (item.mime_type !== null && (typeof item.mime_type !== 'string' || item.mime_type.length > 127 ||
             !/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(item.mime_type))) ||
           (item.size_bytes !== null && (!Number.isSafeInteger(item.size_bytes) || item.size_bytes < 0)) ||
+          (item.conversation_context != null && (!item.conversation_context ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.conversation_context.conversation_id || '') ||
+            item.conversation_context.source !== 'active_route_at_request')) ||
+          (item.size_source != null && !['content_length', 'unavailable'].includes(item.size_source)) ||
           typeof item.observed_at !== 'string' ||
           (item.file_name === null && item.mime_type === null && item.size_bytes === null))
         throw new Error('Metadados de artefato inválidos.');
@@ -285,10 +310,12 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       }
       const {lastArtifacts = []} = await chrome.storage.local.get('lastArtifacts');
       lastArtifacts.push({...saved, source: item.source, file_name: item.file_name, mime_type: item.mime_type,
-        size_bytes: item.size_bytes, observed_at: item.observed_at});
+        size_bytes: item.size_bytes, conversation_context: item.conversation_context || null,
+        size_source: item.size_source || null, observed_at: item.observed_at});
       await chrome.storage.local.set({lastArtifacts: lastArtifacts.slice(-20)});
       await recordDiagnostic('artifact_metadata_stored', {source: item.source,
-        file_type: saved.file_type || 'unknown', type_source: saved.type_source});
+        mime_type: item.mime_type, conversation_id: item.conversation_context?.conversation_id || null,
+        size_source: item.size_source});
       return saved;
     }
 
@@ -377,8 +404,12 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return {blocked: true};
     }
     throw new Error('Origem ou operação inválida.');
-  })().then(data => reply({ok: true, data})).catch(error =>
-    reply({ok: false, error: String(error?.message || 'Falha na POC').slice(0, 240)}));
+  })().then(data => reply({ok: true, data})).catch(async error => {
+    if (message?.type === 'capture_prompt' && isChatPage(sender)) {
+      try { await recordDiagnostic('prompt_rejected', {error_code: captureErrorCode(error)}); } catch {}
+    }
+    reply({ok: false, error: String(error?.message || 'Falha na POC').slice(0, 240)});
+  });
   return true;
 });
 

@@ -13,7 +13,8 @@ from cryptography.hazmat.primitives.asymmetric import ec, utils
 from fastapi.testclient import TestClient
 
 from app.db import clean_expired, connect, iso, utc_now
-from app.main import app
+from app.main import app, fingerprint
+from app.schemas import ArtifactMetadataCreate
 from app.settings import get_settings
 from assign_machine import main as assign_machine
 
@@ -157,13 +158,47 @@ def test_artifact_metadata_is_tied_to_machine_assignment(client):
     payload = {"artifact_id": str(uuid4()), "device_installation_id": str(machine_id),
                "platform": "chatgpt_web", "source": "download_headers", "file_name": "synthetic.pdf",
                "mime_type": "application/pdf", "size_bytes": 1024,
+               "conversation_context": {"conversation_id": str(uuid4()), "source": "active_route_at_request"},
+               "size_source": "content_length",
                "observed_at": datetime.now(timezone.utc).isoformat()}
     accepted = signed_post(client, "/v1/artifact-metadata", payload, machine_id, private)
     assert accepted.status_code == 201
     assert accepted.json()["attributed_person"] == "PESSOA-SINTETICA"
+    recent = client.get("/v1/artifact-metadata/recent", headers=AUTH).json()["items"][0]
+    assert recent["mime_type"] == "application/pdf"
+    assert recent["size_bytes"] == 1024
+    assert recent["conversation_id"] == payload["conversation_context"]["conversation_id"]
+    assert recent["conversation_context_source"] == "active_route_at_request"
+    assert recent["size_source"] == "content_length"
     assert client.post("/v1/artifact-metadata", json=payload, headers=AUTH).status_code == 401
+    json_source = {**payload, "artifact_id": str(uuid4()), "source": "metadata_json"}
+    assert signed_post(client, "/v1/artifact-metadata", json_source, machine_id, private).status_code == 422
     with_content = {**payload, "artifact_id": str(uuid4()), "response_text": "synthetic content"}
     assert signed_post(client, "/v1/artifact-metadata", with_content, machine_id, private).status_code == 422
+
+    legacy = {key: value for key, value in payload.items()
+              if key not in ("conversation_context", "size_source")}
+    legacy["artifact_id"] = str(uuid4())
+    legacy_saved = signed_post(client, "/v1/artifact-metadata", legacy, machine_id, private)
+    assert legacy_saved.status_code == 201
+    old_model_dump = ArtifactMetadataCreate.model_validate(legacy).model_dump(mode="json")
+    old_fingerprint_body = {key: value for key, value in old_model_dump.items()
+                            if key not in ("conversation_context", "size_source")}
+    with connect(get_settings()) as db:
+        key_fingerprint = db.execute("SELECT key_fingerprint FROM machines WHERE installation_id = ?",
+                                     (str(machine_id),)).fetchone()[0]
+        old_fingerprint_body["machine_key_fingerprint"] = key_fingerprint
+        current_fingerprint = db.execute("SELECT request_fingerprint FROM artifact_metadata WHERE artifact_id = ?",
+                                         (legacy["artifact_id"],)).fetchone()[0]
+        assert fingerprint(old_fingerprint_body) == current_fingerprint, json.dumps({
+            "old_body": old_fingerprint_body, "expected": fingerprint(old_fingerprint_body),
+            "stored": current_fingerprint,
+        }, sort_keys=True)
+        db.execute("UPDATE artifact_metadata SET request_fingerprint = ? WHERE artifact_id = ?",
+                   (fingerprint(old_fingerprint_body), legacy["artifact_id"]))
+    replay = signed_post(client, "/v1/artifact-metadata", legacy, machine_id, private)
+    assert replay.status_code == 200
+    assert replay.json()["duplicate"] is True
     expired = iso(utc_now() - timedelta(days=8))
     with connect(get_settings()) as db:
         db.execute("UPDATE artifact_metadata SET received_at = ? WHERE artifact_id = ?", (expired, payload["artifact_id"]))

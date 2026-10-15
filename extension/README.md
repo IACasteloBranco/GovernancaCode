@@ -1,5 +1,7 @@
 # Captura local de prompt e resposta
 
+Para arquivos gerados ou baixados, a extensao le apenas os cabecalhos `Content-Disposition`, `Content-Type` e `Content-Length`. Nao clona nem le o corpo; metadados ausentes ficam nulos.
+
 Esta é a extensão Chrome ativa em `extension/`. Ela aplica a política local antes do envio, captura o prompt no editor e reconstrói a resposta da cópia do stream `POST /backend-api/f/conversation`. Não usa API de IA. O backend local em `127.0.0.1:8000` grava os textos em `interactions` e `responses`, atribuídos à instalação e à pessoa cadastrada.
 
 O stream bruto, cookies, cabeçalhos de autenticação e bytes de arquivos não são gravados. `stream_captures` continua armazenando somente métricas e rótulos técnicos. Metadados de arquivos enviados acompanham a interação em `interactions.attachments_json`; metadados de arquivos gerados ou baixados continuam em `artifact_metadata`. As gravações são assinadas pela chave da instalação e exigem o token local configurado no popup.

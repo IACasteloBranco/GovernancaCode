@@ -2,6 +2,7 @@
   const attempts = new Map();
   const recent = [];
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const promptCaptureAttribute = 'data-governanca-prompt-capture';
   const editor = () => [...document.querySelectorAll('#prompt-textarea, [data-testid="prompt-textarea"], form [contenteditable="true"]')]
     .find(node => !node.getClientRects || node.getClientRects().length);
 
@@ -48,6 +49,7 @@
     const state = {promptText: text, conversationUrl: url, confirmed: false};
     state.promptHash = promptHash(text);
     const attemptId = markAttempt(state);
+    document.documentElement.setAttribute(promptCaptureAttribute, 'pending');
     recent.push(state);
     if (recent.length > 8) recent.shift();
     state.interaction = send({type: 'capture_prompt', payload: {
@@ -57,8 +59,13 @@
       attachments: observation.items || [], attachments_capture_status: observation.capture_status,
       attachments_truncated: observation.truncated === true,
       adapter_version: '0.4.4', observed_at: observedAt
-    }}).then(result => result.interaction_id);
+    }}).then(result => {
+      document.documentElement.setAttribute(promptCaptureAttribute, 'stored');
+      globalThis.GovernancaFiles?.consume?.(observation);
+      return result.interaction_id;
+    });
     state.interaction.catch(() => {
+      document.documentElement.setAttribute(promptCaptureAttribute, 'rejected');
       attempts.delete(attemptId);
       const index = recent.indexOf(state);
       if (index >= 0) recent.splice(index, 1);

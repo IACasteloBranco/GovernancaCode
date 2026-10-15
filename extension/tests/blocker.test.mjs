@@ -53,7 +53,8 @@ test('bloqueio de eventos cobre Enter, clique e submit e libera após mudança d
     getAttribute: key => attributes.get(key), removeAttribute: key => attributes.delete(key), append: () => {}};
   const document = {
     documentElement: root, body: {append: () => {}},
-    addEventListener: () => {}, querySelector: selector => selector === '#prompt-textarea' ? field : null,
+    addEventListener: () => {},
+    querySelector: selector => selector === '#prompt-textarea' ? field : null,
     createElement: () => {
       const toast = {setAttribute: () => {}, style: {}, remove: () => {}};
       toasts.push(toast);
@@ -68,7 +69,14 @@ test('bloqueio de eventos cobre Enter, clique e submit e libera após mudança d
   const projectId = 'g-p-6abe9293e8248191ada3632b6a5316a6';
   const pageLocation = {origin: 'https://chatgpt.com', href: `https://chatgpt.com/g/${projectId}-eduardo/c/conversa`};
   runInNewContext(`${policySource}\n${messagesSource}\n${bridgeSource}`, {window, document, chrome,
-    location: pageLocation, URL, Date, setTimeout: () => {}, globalThis: {GovernancaCaptureAttempt: () => { captures++; }}});
+    location: pageLocation, URL, Date, setTimeout: () => {}, globalThis: {
+      GovernancaPlatform: {fileRoot: () => form},
+      GovernancaFiles: {
+        rememberSelection: input => fileSelections.push(input),
+        observe: () => ({capture_status: 'unavailable', items: [], truncated: false})
+      },
+      GovernancaCaptureAttempt: () => { captures++; }
+    }});
   const event = extra => ({...extra, prevented: false, stopped: false,
     preventDefault() { this.prevented = true; },
     stopImmediatePropagation() { this.stopped = true; }});

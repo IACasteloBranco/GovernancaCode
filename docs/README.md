@@ -2,6 +2,7 @@
 
 ## Comece aqui
 
+- [Plano de infraestrutura do MVP no Google Cloud](PLANO_INFRAESTRUTURA_MVP_GCP.md): proposta de hospedagem, controles e etapas para o piloto interno.
 - [Fluxo de trabalho](FLUXO_TRABALHO.md): investigação, implementação e verificação com Graphify, pstack e Ponytail.
 - [Claude e arquivos, histórico até 0.6.12](CLAUDE_E_ARQUIVOS_2026-10-05.md): histórico das correções e validações da captura.
 - [Estado atual em 01/10/2026](ESTADO_ATUAL_2026-10-01.md): componentes, evidências, pendências e instruções de ativação.

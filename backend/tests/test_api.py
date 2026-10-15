@@ -54,7 +54,7 @@ def test_health_is_public_and_does_not_expose_internal_configuration(client):
     result = client.get("/health")
 
     assert result.status_code == 200
-    assert result.json() == {"status": "ok", "schema_version": "0.4"}
+    assert result.json() == {"status": "ok", "schema_version": "0.5"}
     assert client.get("/docs").status_code == 404
 
 
@@ -202,7 +202,7 @@ def test_file_metadata_and_material_only_response_roundtrip(client, platform):
         "capture_status": "metadata_only", "source": "selection_event",
     }, {
         "name": "documento-sintetico.docx", "mime_type": None, "size_bytes": None,
-        "capture_status": "metadata_only", "source": "visible_card",
+        "capture_status": "metadata_only", "source": "visible_card", "association_status": "ambiguous",
     }])
     created = client.post("/v1/interactions", json=payload, headers=AUTH)
     assert created.status_code == 201
@@ -222,6 +222,7 @@ def test_file_metadata_and_material_only_response_roundtrip(client, platform):
     assert detail["attachments"][0]["source"] == "selection_event"
     assert detail["attachments"][1]["name"] == "documento-sintetico.docx"
     assert detail["attachments"][1]["source"] == "visible_card"
+    assert detail["attachments"][1]["association_status"] == "ambiguous"
     assert detail["responses"][0]["generated_materials"]["items"][0]["capture_status"] == "presence_only"
     response["generated_materials"]["items"][0] = {"capture_status": "metadata_only", "name": "report.pdf"}
     assert client.post(route, json=response, headers=AUTH).status_code == 409

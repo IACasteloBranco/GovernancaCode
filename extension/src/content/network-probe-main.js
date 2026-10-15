@@ -24,7 +24,6 @@
     try {
       const url = new URL(typeof input === 'string' ? input : input?.url || String(input), location.href);
       if (url.origin !== location.origin) return null;
-      if (/^\/backend-api\/conversation\/[^/]+\/interpreter\/download\/?$/.test(url.pathname)) return 'metadata_json';
       if (url.pathname === '/backend-api/estuary/content') return 'download_headers';
     } catch { /* URL alheia ou inválida. */ }
     return null;
@@ -82,7 +81,16 @@
     return safeFileName(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1).replace(/\\(.)/g, '$1') : raw);
   }
 
-  function emitArtifactMetadata(source, fileName, mimeType, sizeBytes) {
+  function conversationContext(href) {
+    try {
+      const url = new URL(href);
+      if (url.origin !== location.origin) return null;
+      const match = url.pathname.match(/^\/(?:g\/[a-zA-Z0-9-]+\/)?c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i);
+      return match ? {conversation_id: match[1], source: 'active_route_at_request'} : null;
+    } catch { return null; }
+  }
+
+  function emitArtifactMetadata(source, fileName, mimeType, sizeBytes, context, sizeSource) {
     if (!captureEnabled) return;
     const cleanName = safeFileName(fileName);
     const cleanMime = typeof mimeType === 'string' &&
@@ -92,50 +100,23 @@
     window.postMessage({marker: MARKER, phase: 'artifact_metadata', payload: {
       artifact_id: crypto.randomUUID(), platform: 'chatgpt_web', source,
       file_name: cleanName, mime_type: cleanMime, size_bytes: cleanSize,
+      conversation_context: context, size_source: sizeSource,
       observed_at: new Date().toISOString()
     }}, location.origin);
   }
 
-  async function readSmallJson(response, maxBytes = 65_536) {
-    if (!response?.body || typeof TextDecoder !== 'function') return null;
-    const declaredLength = Number(response.headers?.get?.('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) return null;
-    let reader;
-    try { reader = response.clone().body.getReader(); } catch { return null; }
-    const decoder = new TextDecoder();
-    let bytes = 0;
-    let text = '';
-    try {
-      while (true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        bytes += value?.byteLength || 0;
-        if (bytes > maxBytes) { await reader.cancel(); return null; }
-        text += decoder.decode(value, {stream: true});
-      }
-      text += decoder.decode();
-      return JSON.parse(text);
-    } catch {
-      try { await reader.cancel(); } catch { /* clone já encerrado. */ }
-      return null;
-    }
-  }
-
-  async function captureArtifactMetadata(response) {
-    const json = await readSmallJson(response);
-    if (!json || typeof json !== 'object' || Array.isArray(json)) return;
-    const fileName = safeFileName(json.file_name);
-    const mimeType = typeof json.mime_type === 'string' ? mime(json.mime_type) : null;
-    const sizeBytes = Number.isSafeInteger(json.file_size_bytes) && json.file_size_bytes >= 0 ? json.file_size_bytes : null;
-    emitArtifactMetadata('metadata_json', fileName, mimeType, sizeBytes);
-  }
-
-  function captureDownloadHeaders(response) {
+  function captureDownloadHeaders(response, context) {
     const fileName = dispositionFileName(response.headers?.get?.('content-disposition'));
     const mimeType = mime(response.headers?.get?.('content-type')) || null;
     const rawLength = response.headers?.get?.('content-length');
-    const sizeBytes = rawLength && /^\d+$/.test(rawLength) ? Number(rawLength) : null;
-    emitArtifactMetadata('download_headers', fileName, mimeType, sizeBytes);
+    const contentRange = response.headers?.get?.('content-range');
+    const contentEncoding = response.headers?.get?.('content-encoding');
+    const parsedLength = rawLength && /^\d+$/.test(rawLength) ? Number(rawLength) : null;
+    const sizeBytes = response.status === 200 && !contentRange &&
+      (!contentEncoding || contentEncoding.toLowerCase() === 'identity') &&
+      Number.isSafeInteger(parsedLength) ? parsedLength : null;
+    emitArtifactMetadata('download_headers', fileName, mimeType, sizeBytes, context,
+      sizeBytes === null ? 'unavailable' : 'content_length');
   }
 
   async function inspectConversation(response, attemptId, requestId, path) {
@@ -491,6 +472,7 @@
         const path = safeTarget(args[0]);
         const method = methodOf(args[1]?.method || args[0]?.method);
         const artifactKind = captureEnabled ? artifactTarget(args[0], method) : null;
+        const artifactContext = artifactKind ? conversationContext(location.href) : null;
         const attemptId = captureEnabled ? captureAttempt(path, method) : null;
         const requestId = ++nextRequestId;
         const start = performance.now();
@@ -511,10 +493,7 @@
           if (candidate && /(?:^|\/)conversation$/.test(path) && response?.ok && response?.body && contentType === 'text/event-stream') {
             void inspectConversation(response, attemptId, requestId, path);
           }
-          if (artifactKind && response?.ok) {
-            if (artifactKind === 'metadata_json' && contentType === 'application/json') void captureArtifactMetadata(response);
-            else if (artifactKind === 'download_headers') captureDownloadHeaders(response);
-          }
+          if (artifactKind === 'download_headers' && response?.ok) captureDownloadHeaders(response, artifactContext);
         }, () => {
           if (candidate) emit(attemptId, 'fetch', 'error', {requestId, path, method, elapsedMs: elapsed(start)});
         });

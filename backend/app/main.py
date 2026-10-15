@@ -103,7 +103,7 @@ if settings.cors_origins:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", schema_version="0.4")
+    return HealthResponse(status="ok", schema_version="0.5")
 
 
 @app.get("/v1/stream-captures/recent", dependencies=[Depends(require_lab_token)])
@@ -132,7 +132,8 @@ def recent_artifact_metadata(settings: Settings = Depends(get_settings)) -> dict
     with connect(settings) as db:
         rows = db.execute(
             """SELECT artifact_id, device_installation_id, attributed_person, machine_key_fingerprint,
-                      platform, source, file_name, mime_type, size_bytes, observed_at, received_at
+                      platform, source, file_name, mime_type, size_bytes, conversation_id,
+                      conversation_context_source, size_source, observed_at, received_at
                FROM artifact_metadata ORDER BY received_at DESC LIMIT 20"""
         ).fetchall()
     return {"items": [dict(row) for row in rows]}
@@ -382,6 +383,9 @@ def create_artifact_metadata(
     if str(payload.device_installation_id) != machine.installation_id:
         raise HTTPException(status_code=409, detail="Machine and installation do not match")
     body = payload.model_dump(mode="json")
+    for key in ("conversation_context", "size_source"):
+        if body[key] is None:
+            body.pop(key)
     body["machine_key_fingerprint"] = machine.fingerprint
     request_fingerprint = fingerprint(body)
     received_at = utc_now()
@@ -402,11 +406,14 @@ def create_artifact_metadata(
             """INSERT INTO artifact_metadata (
                 artifact_id, request_fingerprint, device_installation_id, attributed_person,
                 machine_key_fingerprint, platform, source, file_name, mime_type, size_bytes,
-                observed_at, received_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                conversation_id, conversation_context_source, size_source, observed_at, received_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (artifact_id, request_fingerprint, machine.installation_id, machine.person_name,
              machine.fingerprint, payload.platform, payload.source, payload.file_name, payload.mime_type,
-             payload.size_bytes, iso(payload.observed_at), iso(received_at)),
+             payload.size_bytes,
+             str(payload.conversation_context.conversation_id) if payload.conversation_context else None,
+             payload.conversation_context.source if payload.conversation_context else None,
+             payload.size_source, iso(payload.observed_at), iso(received_at)),
         )
     return {"artifact_id": artifact_id, "status": "stored", "received_at": iso(received_at),
             "attributed_person": machine.person_name, "duplicate": False}

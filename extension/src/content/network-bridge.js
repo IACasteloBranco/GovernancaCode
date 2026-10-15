@@ -32,7 +32,7 @@
     if (data.phase === 'artifact_metadata') {
       const item = data.payload;
       if (!captureEnabled || !item || item.platform !== 'chatgpt_web' ||
-          !UUID.test(item.artifact_id || '') || !['metadata_json', 'download_headers'].includes(item.source) ||
+          !UUID.test(item.artifact_id || '') || item.source !== 'download_headers' ||
           typeof item.observed_at !== 'string' ||
           (item.file_name !== null && (typeof item.file_name !== 'string' || !item.file_name ||
             item.file_name.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(item.file_name))) ||
@@ -40,10 +40,15 @@
             !/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(item.mime_type))) ||
           (item.size_bytes !== null && (!Number.isSafeInteger(item.size_bytes) || item.size_bytes < 0 ||
             item.size_bytes > Number.MAX_SAFE_INTEGER)) ||
+          (item.conversation_context != null && (!item.conversation_context ||
+            !UUID.test(item.conversation_context.conversation_id || '') ||
+            item.conversation_context.source !== 'active_route_at_request')) ||
+          (item.size_source != null && !['content_length', 'unavailable'].includes(item.size_source)) ||
           (item.file_name === null && item.mime_type === null && item.size_bytes === null)) return;
       chrome.runtime.sendMessage({type: 'artifact_metadata', payload: {
         artifact_id: item.artifact_id, platform: 'chatgpt_web', source: item.source,
         file_name: item.file_name, mime_type: item.mime_type, size_bytes: item.size_bytes,
+        conversation_context: item.conversation_context || null, size_source: item.size_source || null,
         observed_at: item.observed_at
       }}).catch(() => {});
       return;

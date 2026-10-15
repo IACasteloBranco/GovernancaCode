@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 from .settings import Settings
 
-SCHEMA_VERSION = "0.4"
+SCHEMA_VERSION = "0.5"
 
 
 def utc_now() -> datetime:
@@ -126,6 +126,9 @@ def initialize(settings: Settings) -> None:
                 file_name TEXT,
                 mime_type TEXT,
                 size_bytes INTEGER,
+                conversation_id TEXT,
+                conversation_context_source TEXT,
+                size_source TEXT,
                 observed_at TEXT NOT NULL,
                 received_at TEXT NOT NULL
             );
@@ -163,6 +166,11 @@ def initialize(settings: Settings) -> None:
             db.execute("ALTER TABLE responses ADD COLUMN generated_materials_json TEXT NOT NULL DEFAULT '{\"capture_status\":\"unavailable\",\"items\":[],\"truncated\":false}'")
         db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.3', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
         db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.4', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+        artifact_columns = {row["name"] for row in db.execute("PRAGMA table_info(artifact_metadata)")}
+        for name in ("conversation_id", "conversation_context_source", "size_source"):
+            if name not in artifact_columns:
+                db.execute(f"ALTER TABLE artifact_metadata ADD COLUMN {name} TEXT")
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.5', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
 
 
 def json_dump(value: Any) -> str:

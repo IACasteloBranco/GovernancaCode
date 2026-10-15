@@ -22,4 +22,8 @@ test('o pacote limita a injeção ao ChatGPT e usa a API local de identidade', a
   assert.match(worker, /const API = 'http:\/\/127\.0\.0\.1:8000'/);
   assert.match(worker, /X-Machine-Signature/);
   assert.match(worker, /device_installation_id: installationId/);
+  const popup = await readFile(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
+  assert.match(popup, /Captura prompts e respostas do ChatGPT/);
+  assert.match(popup, /metadados observados registrados, sem leitura do conteúdo do arquivo/);
+  assert.doesNotMatch(popup, /Não envia nem grava prompts ou respostas/);
 });

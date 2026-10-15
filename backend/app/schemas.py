@@ -59,6 +59,7 @@ class AttachmentMetadata(BaseModel):
     size_bytes: int | None = Field(default=None, ge=0, le=9007199254740991, strict=True)
     capture_status: Literal["metadata_only", "presence_only", "unavailable"]
     source: Literal["visible_card", "selection_event"] | None = None
+    association_status: Literal["ambiguous"] | None = None
 
     @model_validator(mode="after")
     def validate_metadata(self) -> "AttachmentMetadata":
@@ -202,17 +203,34 @@ class StreamCaptureCreate(BaseModel):
         return self
 
 
+class ConversationContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    source: Literal["active_route_at_request"]
+
+
 class ArtifactMetadataCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     artifact_id: UUID
     device_installation_id: UUID
     platform: Literal["chatgpt_web"]
-    source: Literal["metadata_json", "download_headers"]
+    source: Literal["download_headers"]
     file_name: str | None = Field(default=None, max_length=255)
     mime_type: str | None = Field(default=None, max_length=127)
     size_bytes: int | None = Field(default=None, ge=0, le=9007199254740991, strict=True)
+    conversation_context: ConversationContext | None = None
+    size_source: Literal["content_length", "unavailable"] | None = None
     observed_at: datetime
+
+    @model_validator(mode="after")
+    def validate_metadata_provenance(self) -> "ArtifactMetadataCreate":
+        if self.size_source == "content_length" and self.size_bytes is None:
+            raise ValueError("content_length requires size_bytes")
+        if self.size_source == "unavailable" and self.size_bytes is not None:
+            raise ValueError("unavailable size cannot include size_bytes")
+        return self
 
     @field_validator("file_name")
     @classmethod
@@ -277,7 +295,7 @@ class StreamCaptureAccepted(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
-    schema_version: Literal["0.4"]
+    schema_version: Literal["0.5"]
 
 
 class InteractionDetail(BaseModel):

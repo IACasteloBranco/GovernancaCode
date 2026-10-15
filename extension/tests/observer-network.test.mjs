@@ -40,7 +40,10 @@ test('stores prompt and response together and restores a turn link after reload'
   const first = createObserver();
   first.context.GovernancaCaptureAttempt();
   const attemptId = first.attrs.get('data-governanca-probe-attempt');
+  assert.equal(first.attrs.get('data-governanca-prompt-capture'), 'pending');
   assert.equal(first.sent[0].payload.prompt.text, `  ${prompt} \n`);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(first.attrs.get('data-governanca-prompt-capture'), 'stored');
   first.listeners.get('governanca-ai-network-capture')({detail: {
     attemptId, text: answer, captureStatus: 'complete'
   }});
@@ -93,6 +96,30 @@ test('keeps uploaded-file metadata on the prompt and accepts an attachment-only 
   assert.deepEqual(JSON.parse(JSON.stringify(payload.attachments)), observation.items);
 });
 
+test('consumes cached file metadata only after the backend stores the prompt', async () => {
+  const observer = createObserver();
+  const observation = {capture_status: 'observed', items: [], truncated: false};
+  let consumed;
+  observer.context.GovernancaFiles = {consume: value => { consumed = value; }};
+
+  observer.context.GovernancaCaptureAttempt(observation);
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  assert.equal(consumed, observation);
+});
+
+test('retains cached file metadata when the backend rejects the prompt', async () => {
+  const observer = createObserver({sendMessage: message => message.type === 'capture_prompt'
+    ? {ok: false, error: 'synthetic failure'} : {ok: true, data: {status: 'complete'}}});
+  let consumed = false;
+  observer.context.GovernancaFiles = {consume: () => { consumed = true; }};
+
+  observer.context.GovernancaCaptureAttempt({capture_status: 'observed', items: [], truncated: false});
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  assert.equal(consumed, false);
+});
+
 test('does not create an empty prompt when no attachment was observed', () => {
   const observer = createObserver({promptText: ''});
 
@@ -100,4 +127,16 @@ test('does not create an empty prompt when no attachment was observed', () => {
 
   assert.equal(observer.sent.length, 0);
   assert.equal(observer.attrs.has('data-governanca-probe-attempt'), false);
+});
+
+test('marks prompt capture outcome without exposing prompt text', async () => {
+  const observer = createObserver({sendMessage: message => message.type === 'capture_prompt'
+    ? {ok: false, error: 'synthetic failure'} : {ok: true, data: {status: 'complete'}}});
+
+  observer.context.GovernancaCaptureAttempt();
+  assert.equal(observer.attrs.get('data-governanca-prompt-capture'), 'pending');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(observer.attrs.get('data-governanca-prompt-capture'), 'rejected');
+  assert.equal([...observer.attrs.values()].includes(prompt), false);
+  assert.equal(observer.warnings.length, 1);
 });
