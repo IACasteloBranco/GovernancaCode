@@ -110,15 +110,27 @@ test('reconstructs DPU snapshots and append patches in order', async () => {
   assert.equal(capture.captureStatus, 'complete');
 });
 
-test('a transport end with an in-progress assistant stays incomplete', async () => {
+test('appends assistant text deltas after a partial DPU snapshot', async () => {
+  const frames = [
+    `event: delta\ndata: ${JSON.stringify({v: {message: {id: 'm1', author: {role: 'assistant'},
+      status: 'in_progress', content: {parts: ['ACK-']}}}})}\n\n`,
+    `event: delta\ndata: ${JSON.stringify({v: '10'})}\n\n`,
+    'data: [DONE]\n\n'
+  ];
+  const capture = await captureFrom(makeProbe({abortAfterDone: true, frames}));
+  assert.equal(capture.text, 'ACK-10');
+  assert.equal(capture.captureStatus, 'complete');
+});
+
+test('the terminal marker completes a response without assistant status metadata', async () => {
   const capture = await captureFrom(makeProbe({abortAfterDone: true, finished: false}));
-  assert.equal(capture.captureStatus, 'incomplete');
+  assert.equal(capture.captureStatus, 'complete');
   assert.equal(capture.text, 'Resposta sintética');
 });
 
-test('a finished message without end_turn remains incomplete', async () => {
+test('the terminal marker completes a response without end_turn metadata', async () => {
   const capture = await captureFrom(makeProbe({abortAfterDone: true, endTurn: false}));
-  assert.equal(capture.captureStatus, 'incomplete');
+  assert.equal(capture.captureStatus, 'complete');
 });
 
 test('ignores tool calls, tool output and thoughts before the final assistant text', async () => {

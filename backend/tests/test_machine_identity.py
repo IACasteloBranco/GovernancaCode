@@ -20,6 +20,8 @@ from assign_machine import main as assign_machine
 
 TOKEN = "synthetic-test-token-not-for-real-use-0001"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+OPERATOR_TOKEN = "synthetic-operator-token-not-for-real-use-0002"
+OPERATOR_AUTH = {"Authorization": f"Bearer {OPERATOR_TOKEN}"}
 PROJECT = "g-p-6abacc4edb1c81918be5e01d0038640a"
 
 
@@ -27,7 +29,7 @@ PROJECT = "g-p-6abacc4edb1c81918be5e01d0038640a"
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_API_TOKEN", TOKEN)
     monkeypatch.setenv("CAPTURE_API_TOKEN", TOKEN)
-    monkeypatch.setenv("OPERATOR_READ_TOKEN", "synthetic-operator-token-not-for-real-use-0002")
+    monkeypatch.setenv("OPERATOR_READ_TOKEN", OPERATOR_TOKEN)
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "machine.sqlite3"))
     monkeypatch.setenv("RETENTION_DAYS", "7")
     monkeypatch.setenv("MACHINE_SIGNATURE_REQUIRED", "true")
@@ -75,6 +77,17 @@ def signed_post(client, path, payload, machine_id, private, nonce=None, body=Non
         "X-Machine-Nonce": nonce, "X-Machine-Signature": signature})
 
 
+def signed_get(client, path, machine_id, private):
+    timestamp = str(int(datetime.now(timezone.utc).timestamp() * 1000))
+    nonce = str(uuid4())
+    digest = hashlib.sha256(b"").hexdigest()
+    message = f"GET\n{path}\n{timestamp}\n{nonce}\n{digest}".encode("utf-8")
+    r, s = utils.decode_dss_signature(private.sign(message, ec.ECDSA(hashes.SHA256())))
+    signature = b64(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+    return client.get(path, headers={"X-Machine-Id": str(machine_id), "X-Machine-Timestamp": timestamp,
+        "X-Machine-Nonce": nonce, "X-Machine-Signature": signature})
+
+
 def test_machine_signature_allows_any_project_after_person_assignment(client):
     machine_id = uuid4()
     private, public = key_material()
@@ -82,24 +95,24 @@ def test_machine_signature_allows_any_project_after_person_assignment(client):
     assert client.post(route, json=prompt_payload(machine_id), headers=AUTH).status_code == 401
     enrolled = client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": public}, headers=AUTH)
     assert enrolled.status_code == 200
-    assert enrolled.json()["person_name"] is None
+    assert enrolled.json()["installation_id"] == str(machine_id)
     assert signed_post(client, route, prompt_payload(machine_id), machine_id, private).status_code == 403
     with connect(get_settings()) as db:
-        db.execute("UPDATE machines SET person_name = ?, assigned_at = ? WHERE installation_id = ?",
-                   ("PESSOA-SINTETICA", iso(utc_now()), str(machine_id)))
+        db.execute("UPDATE machines SET person_name = ?, employee_id = ?, department_code = ?, assigned_at = ? WHERE installation_id = ?",
+                   ("PESSOA-SINTETICA", "func-001", "dep-sintetico", iso(utc_now()), str(machine_id)))
     accepted = signed_post(client, route, prompt_payload(machine_id), machine_id, private)
     assert accepted.status_code == 201
-    detail = client.get(f"/v1/interactions/{accepted.json()['interaction_id']}", headers=AUTH).json()
+    detail = client.get(f"/v1/interactions/{accepted.json()['interaction_id']}", headers=OPERATOR_AUTH).json()
     assert detail["attributed_person"] == "PESSOA-SINTETICA"
     assert detail["project_id"] == PROJECT
     assert detail["machine_key_fingerprint"] == enrolled.json()["key_fingerprint"]
     other = signed_post(client, route, prompt_payload(machine_id, "g-p-other"), machine_id, private)
     assert other.status_code == 201
-    other_detail = client.get(f"/v1/interactions/{other.json()['interaction_id']}", headers=AUTH).json()
+    other_detail = client.get(f"/v1/interactions/{other.json()['interaction_id']}", headers=OPERATOR_AUTH).json()
     assert other_detail["project_id"] == "g-p-other"
     outside = signed_post(client, route, prompt_payload(machine_id, None), machine_id, private)
     assert outside.status_code == 201
-    outside_detail = client.get(f"/v1/interactions/{outside.json()['interaction_id']}", headers=AUTH).json()
+    outside_detail = client.get(f"/v1/interactions/{outside.json()['interaction_id']}", headers=OPERATOR_AUTH).json()
     assert outside_detail["project_id"] is None
     assert signed_post(client, route, prompt_payload(uuid4()), machine_id, private).status_code == 409
 
@@ -128,8 +141,8 @@ def test_stream_capture_stores_metadata_with_assigned_machine_and_rejects_conten
     route = "/v1/stream-captures"
     assert signed_post(client, route, payload, machine_id, private).status_code == 403
     with connect(get_settings()) as db:
-        db.execute("UPDATE machines SET person_name = ?, assigned_at = ? WHERE installation_id = ?",
-                   ("PESSOA-SINTETICA", iso(utc_now()), str(machine_id)))
+        db.execute("UPDATE machines SET person_name = ?, employee_id = ?, department_code = ?, assigned_at = ? WHERE installation_id = ?",
+                   ("PESSOA-SINTETICA", "func-001", "dep-sintetico", iso(utc_now()), str(machine_id)))
     accepted = signed_post(client, route, payload, machine_id, private)
     assert accepted.status_code == 201, accepted.text
     assert accepted.json()["attributed_person"] == "PESSOA-SINTETICA"
@@ -156,8 +169,8 @@ def test_artifact_metadata_is_tied_to_machine_assignment(client):
     private, public = key_material()
     client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": public}, headers=AUTH)
     with connect(get_settings()) as db:
-        db.execute("UPDATE machines SET person_name = ?, assigned_at = ? WHERE installation_id = ?",
-                   ("PESSOA-SINTETICA", iso(utc_now()), str(machine_id)))
+        db.execute("UPDATE machines SET person_name = ?, employee_id = ?, department_code = ?, assigned_at = ? WHERE installation_id = ?",
+                   ("PESSOA-SINTETICA", "func-001", "dep-sintetico", iso(utc_now()), str(machine_id)))
     payload = {"artifact_id": str(uuid4()), "device_installation_id": str(machine_id),
                "platform": "chatgpt_web", "source": "download_headers", "file_name": "synthetic.pdf",
                "mime_type": "application/pdf", "size_bytes": 1024,
@@ -167,7 +180,7 @@ def test_artifact_metadata_is_tied_to_machine_assignment(client):
     accepted = signed_post(client, "/v1/artifact-metadata", payload, machine_id, private)
     assert accepted.status_code == 201
     assert accepted.json()["attributed_person"] == "PESSOA-SINTETICA"
-    recent = client.get("/v1/artifact-metadata/recent", headers=AUTH).json()["items"][0]
+    recent = client.get("/v1/artifact-metadata/recent", headers=OPERATOR_AUTH).json()["items"][0]
     assert recent["mime_type"] == "application/pdf"
     assert recent["size_bytes"] == 1024
     assert recent["conversation_id"] == payload["conversation_context"]["conversation_id"]
@@ -218,8 +231,8 @@ def test_replay_and_changed_key_are_rejected(client):
     assert client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": another},
                        headers=AUTH).status_code == 409
     with connect(get_settings()) as db:
-        db.execute("UPDATE machines SET person_name = ? WHERE installation_id = ?",
-                   ("PESSOA-SINTETICA", str(machine_id)))
+        db.execute("UPDATE machines SET person_name = ?, employee_id = ?, department_code = ? WHERE installation_id = ?",
+                   ("PESSOA-SINTETICA", "func-001", "dep-sintetico", str(machine_id)))
     payload = prompt_payload(machine_id)
     nonce = str(uuid4())
     first = signed_post(client, "/v1/interactions", payload, machine_id, private, nonce)
@@ -235,16 +248,28 @@ def test_replay_and_changed_key_are_rejected(client):
 
 def test_operator_assignment_requires_matching_key_fingerprint(client, monkeypatch):
     machine_id = uuid4()
-    _, public = key_material()
+    private, public = key_material()
     registered = client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": public},
                              headers=AUTH).json()
-    monkeypatch.setattr("sys.argv", ["assign_machine.py", str(machine_id), "PESSOA-SINTETICA",
-                                    "--fingerprint-prefix", "0000000000000000"])
+    with connect(get_settings()) as db:
+        now = iso(utc_now())
+        db.execute(
+            "INSERT INTO departments(department_code, department_name, active, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
+            ("dep-sintetico", "Departamento Sintético", now, now),
+        )
+        db.execute(
+            "INSERT INTO employees(employee_id, person_name, department_code, active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+            ("func-001", "PESSOA-SINTETICA", "dep-sintetico", now, now),
+        )
+    args = ["assign_machine.py", str(machine_id), "--employee-id", "func-001", "--fingerprint-prefix"]
+    monkeypatch.setattr("sys.argv", [*args, "0000000000000000"])
     with pytest.raises(SystemExit):
         assign_machine()
-    assert client.get(f"/v1/machines/{machine_id}", headers=AUTH).json()["person_name"] is None
-    monkeypatch.setattr("sys.argv", ["assign_machine.py", str(machine_id), "PESSOA-SINTETICA",
-                                    "--fingerprint-prefix", registered["key_fingerprint"][:16]])
+    assert signed_get(client, f"/v1/machines/{machine_id}", machine_id, private).status_code == 200
+    monkeypatch.setattr("sys.argv", [*args, registered["key_fingerprint"][:16]])
     assign_machine()
-    assert client.get(f"/v1/machines/{machine_id}", headers=AUTH).json()["person_name"] == "PESSOA-SINTETICA"
-    assert client.get(f"/v1/machines/{machine_id}", headers=AUTH).json()["project_id"] is None
+    assigned = signed_get(client, f"/v1/machines/{machine_id}", machine_id, private).json()
+    assert assigned["person_name"] == "PESSOA-SINTETICA"
+    assert assigned["employee_id"] == "func-001"
+    assert assigned["department_code"] == "dep-sintetico"
+    assert assigned["project_id"] is None

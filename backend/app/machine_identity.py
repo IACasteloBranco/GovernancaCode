@@ -15,15 +15,18 @@ from cryptography.hazmat.primitives import hashes, serialization
 from fastapi import Depends, HTTPException, Request
 
 from .db import connect, iso, utc_now
-from .security import require_lab_token
+from .security import require_capture_token, require_machine_viewer
 from .settings import Settings, get_settings
 
 
 @dataclass(frozen=True)
 class Machine:
     installation_id: str
-    person_name: str
+    person_name: str | None
     fingerprint: str
+    employee_id: str | None
+    department_code: str | None
+    google_sub: str | None
 
 
 def _decode(value: str) -> bytes:
@@ -58,27 +61,28 @@ def project_id_from_url(value: str | None) -> str | None:
     return candidate if candidate.startswith("g-p-") and len(candidate) <= 128 and candidate[4:].isalnum() else None
 
 
-def enroll_machine(installation_id: UUID, jwk: dict, settings: Settings) -> dict:
+def enroll_machine(installation_id: UUID, jwk: dict, settings: Settings, google_sub: str | None = None) -> dict:
     key = public_key_from_jwk(jwk)
     fingerprint = key_fingerprint(key)
     identifier = str(installation_id)
     normalized = {field: jwk[field] for field in ("kty", "crv", "x", "y")}
     with connect(settings) as db:
         db.execute("BEGIN IMMEDIATE")
-        existing = db.execute("SELECT key_fingerprint, person_name, project_id FROM machines WHERE installation_id = ?",
+        existing = db.execute("SELECT key_fingerprint, google_sub, revoked_at FROM machines WHERE installation_id = ?",
                               (identifier,)).fetchone()
         if existing and existing["key_fingerprint"] != fingerprint:
             raise HTTPException(status_code=409, detail="Installation already has another key")
+        if existing and existing["revoked_at"]:
+            raise HTTPException(status_code=403, detail="Installation revoked")
+        if existing and settings.app_env.lower() == "lab" and existing["google_sub"] != google_sub:
+            raise HTTPException(status_code=403, detail="Installation belongs to another Google account")
         if not existing:
-            db.execute("INSERT INTO machines(installation_id, public_key_json, key_fingerprint, created_at) VALUES (?, ?, ?, ?)",
-                       (identifier, json.dumps(normalized, sort_keys=True), fingerprint, iso(utc_now())))
-    return {"installation_id": identifier, "key_fingerprint": fingerprint,
-            "person_name": existing["person_name"] if existing else None,
-            "project_id": existing["project_id"] if existing else None}
+            db.execute("INSERT INTO machines(installation_id, public_key_json, key_fingerprint, created_at, google_sub) VALUES (?, ?, ?, ?, ?)",
+                       (identifier, json.dumps(normalized, sort_keys=True), fingerprint, iso(utc_now()), google_sub))
+    return {"installation_id": identifier, "key_fingerprint": fingerprint}
 
 
-async def require_machine_signature(request: Request, _lab=Depends(require_lab_token),
-                                    settings: Settings = Depends(get_settings)) -> Machine | None:
+async def verify_machine_signature(request: Request, settings: Settings) -> Machine | None:
     if not settings.machine_signature_required:
         return None
     try:
@@ -97,8 +101,8 @@ async def require_machine_signature(request: Request, _lab=Depends(require_lab_t
         row = db.execute("SELECT * FROM machines WHERE installation_id = ?", (identifier,)).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="Machine not enrolled")
-    if not row["person_name"]:
-        raise HTTPException(status_code=403, detail="Machine assignment pending")
+    if row["revoked_at"]:
+        raise HTTPException(status_code=403, detail="Installation revoked")
     key = public_key_from_jwk(json.loads(row["public_key_json"]))
     body_hash = hashlib.sha256(await request.body()).hexdigest()
     signed = f"{request.method}\n{request.url.path}\n{timestamp}\n{nonce}\n{body_hash}".encode("utf-8")
@@ -115,4 +119,24 @@ async def require_machine_signature(request: Request, _lab=Depends(require_lab_t
             raise HTTPException(status_code=409, detail="Machine request already used")
         db.execute("INSERT INTO machine_nonces(installation_id, nonce, expires_at) VALUES (?, ?, ?)",
                    (identifier, nonce, iso(utc_now() + timedelta(minutes=10))))
-    return Machine(identifier, row["person_name"], row["key_fingerprint"])
+    return Machine(identifier, row["person_name"], row["key_fingerprint"],
+                   row["employee_id"], row["department_code"], row["google_sub"])
+
+
+async def require_machine_proof(request: Request, google_sub: str | None = Depends(require_machine_viewer),
+                                settings: Settings = Depends(get_settings)) -> Machine | None:
+    machine = await verify_machine_signature(request, settings)
+    if settings.app_env.lower() == "lab" and (machine is None or machine.google_sub != google_sub):
+        raise HTTPException(status_code=403, detail="Installation belongs to another Google account")
+    return machine
+
+
+async def require_machine_signature(request: Request, google_sub: str | None = Depends(require_capture_token),
+                                    settings: Settings = Depends(get_settings)) -> Machine | None:
+    machine = await verify_machine_signature(request, settings)
+    if settings.app_env.lower() == "lab" and (machine is None or machine.google_sub != google_sub or
+                                               machine.department_code != settings.pilot_department_code):
+        raise HTTPException(status_code=403, detail="Installation is not authorized for this pilot")
+    if machine is not None and not (machine.person_name and machine.employee_id and machine.department_code):
+        raise HTTPException(status_code=403, detail="Machine assignment pending")
+    return machine

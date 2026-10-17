@@ -10,6 +10,7 @@
   let manualBlocked = null;
   let policySynchronized = false;
   let machineAssigned = false;
+  let authExpiresAt = null;
   let verification = 0;
   let lastAttempt = {at: 0, text: '', attachments: '', action: ''};
   let pendingRegeneration = null;
@@ -29,7 +30,8 @@
     setTimeout(() => {
       if (verification !== current) return;
       chrome.runtime.sendMessage({type: 'blocker_health', mainActive: false,
-        blocked: manualBlocked !== false, synchronized: policySynchronized}).catch(() => {});
+        blocked: manualBlocked !== false, synchronized: policySynchronized,
+        machineAssigned, authExpired: authExpiresAt !== null && Date.now() >= authExpiresAt}).catch(() => {});
     }, 1000);
   }
   function connect() {
@@ -39,6 +41,7 @@
         if (message?.type !== 'block_policy') return;
         manualBlocked = message.blocked === true;
         machineAssigned = message.machineAssigned === true;
+        authExpiresAt = Number.isSafeInteger(message.authExpiresAt) ? message.authExpiresAt : null;
         policySynchronized = true;
         resetGrant();
         lastAttempt = {at: 0, text: '', attachments: '', action: ''};
@@ -48,6 +51,7 @@
         manualBlocked = null;
         policySynchronized = false;
         machineAssigned = false;
+        authExpiresAt = null;
         resetGrant();
         lastAttempt = {at: 0, text: '', attachments: '', action: ''};
         setTimeout(connect, 1000);
@@ -89,6 +93,23 @@
       }).catch(() => {});
     } catch {}
   }
+  function evaluate(text) {
+    let decision;
+    try {
+      decision = policySynchronized
+        ? globalThis.GovernancaPromptPolicy?.evaluate(text, {destination})
+        : {version: '0.1.2', action: 'BLOCK', findings: [{rule: 'SYNC', action: 'BLOCK', count: 1}]};
+      if (!decision) throw new Error('Política indisponível');
+    } catch {
+      decision = {version: '0.1.2', action: 'REVIEW', findings: [{rule: 'ENGINE', action: 'REVIEW', count: 1}]};
+    }
+    if (manualBlocked === true) decision = {...decision, action: 'BLOCK',
+      findings: [...decision.findings, {rule: 'MANUAL', action: 'BLOCK', count: 1}]};
+    if (!machineAssigned || (authExpiresAt !== null && Date.now() >= authExpiresAt))
+      decision = {...decision, action: 'BLOCK',
+        findings: [...decision.findings, {rule: 'MACHINE', action: 'BLOCK', count: 1}]};
+    return decision;
+  }
   function stop(event) {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -106,20 +127,7 @@
       return;
     }
     resetGrant();
-    let decision;
-    try {
-      decision = policySynchronized
-        ? globalThis.GovernancaPromptPolicy?.evaluate(text, {destination})
-        : {version: '0.1.2', action: 'BLOCK', findings: [{rule: 'SYNC', action: 'BLOCK', count: 1}]};
-      if (!decision) throw new Error('Política indisponível');
-    } catch {
-      decision = {version: '0.1.2', action: 'REVIEW', findings: [{rule: 'ENGINE', action: 'REVIEW', count: 1}]};
-    }
-    if (manualBlocked === true) decision = {...decision, action: 'BLOCK',
-      findings: [...decision.findings, {rule: 'MANUAL', action: 'BLOCK', count: 1}]};
-    if (!machineAssigned)
-      decision = {...decision, action: 'BLOCK',
-        findings: [...decision.findings, {rule: 'MACHINE', action: 'BLOCK', count: 1}]};
+    const decision = evaluate(text);
     lastAttempt = {at: now, text, attachments: attachmentKey, action: decision.action, method};
     logDecision(decision, method);
     if (decision.action === 'BLOCK' || decision.action === 'REVIEW') {
@@ -136,7 +144,8 @@
           return;
         }
         document.documentElement?.setAttribute(policyAttribute, 'allow');
-        document.documentElement?.setAttribute(untilAttribute, String(Date.now() + 15000));
+        document.documentElement?.setAttribute(untilAttribute, String(Math.min(Date.now() + 15000,
+          authExpiresAt ?? Infinity)));
         replayingMenuItem = retryMenuItem;
         retryMenuItem.click();
       }).catch(() => {
@@ -147,7 +156,8 @@
       return;
     }
     document.documentElement?.setAttribute(policyAttribute, 'allow');
-    document.documentElement?.setAttribute(untilAttribute, String(now + (attachments?.capture_status === 'observed' ? 120000 : 15000)));
+    document.documentElement?.setAttribute(untilAttribute, String(Math.min(
+      now + (attachments?.capture_status === 'observed' ? 120000 : 15000), authExpiresAt ?? Infinity)));
     globalThis.GovernancaCaptureAttempt?.(attachments);
     if (decision.action === 'WARN')
       showNotice(messages.describe(decision));
@@ -198,6 +208,18 @@
     if (event.data.phase === 'network_blocked') {
       const reason = event.data.reason === 'expired' ? 'expired' : 'missing';
       chrome.runtime.sendMessage({type: 'prompt_blocked', method: 'network', reason}).catch(() => {});
+      // shortcut: use the current composer for any rejected conversation POST; narrow if other automatic sends need separate treatment.
+      const text = editorText(editor()).trim();
+      if (text) {
+        const decision = evaluate(text);
+        logDecision(decision, 'network');
+        if (decision.action === 'BLOCK' || decision.action === 'REVIEW') {
+          showNotice(messages.describe(decision), true);
+          return;
+        }
+        showNotice(`${messages.describe(decision)} O prompt continua no compositor; revise e use Enviar.`);
+        return;
+      }
       showNotice(reason === 'expired' ? 'Envio impedido: o tempo para processar o anexo expirou. Tente enviar novamente.'
         : 'Envio impedido: não havia uma decisão válida para este prompt.');
     }
@@ -205,6 +227,7 @@
       verification++;
       chrome.runtime.sendMessage({type: 'blocker_health', mainActive: true,
         blocked: manualBlocked !== false, synchronized: policySynchronized,
+        machineAssigned, authExpired: authExpiresAt !== null && Date.now() >= authExpiresAt,
         mainBlocked: event.data.blocked === true}).catch(() => {});
     }
   });

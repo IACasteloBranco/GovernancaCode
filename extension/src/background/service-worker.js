@@ -1,15 +1,105 @@
-const API = 'http://127.0.0.1:8000';
+import {CONFIG} from './config.js';
+
+const CLOUD = CONFIG.mode !== 'local';
+const API = CLOUD ? CONFIG.apiUrl.replace(/\/$/, '') : 'http://127.0.0.1:8000';
 const CHATGPT_ORIGIN = 'https://chatgpt.com';
 const policyPorts = new Set();
 let turnLinkWrites = Promise.resolve();
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
   await chrome.storage.session.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
+  const {captureApiToken, mainApiToken} = await chrome.storage.session.get(['captureApiToken', 'mainApiToken']);
+  if (!captureApiToken && mainApiToken) await chrome.storage.session.set({captureApiToken: mainApiToken});
+  if (mainApiToken) await chrome.storage.session.remove('mainApiToken');
   const {installationId} = await chrome.storage.local.get('installationId');
   if (!installationId) await chrome.storage.local.set({installationId: crypto.randomUUID()});
 })();
 
 const hex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+const base64url = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+function cloudConfigured() {
+  try {
+    const url = new URL(API);
+    return CLOUD && url.protocol === 'https:' && url.origin === API && !url.username && !url.password &&
+      /^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/.test(CONFIG.googleClientId);
+  } catch { return false; }
+}
+
+async function credentials() {
+  if (CLOUD) {
+    const {googleSession} = await chrome.storage.session.get('googleSession');
+    return googleSession?.id_token && Number.isSafeInteger(googleSession.exp) &&
+      googleSession.exp * 1000 > Date.now() ? googleSession : null;
+  }
+  const {captureApiToken} = await chrome.storage.session.get('captureApiToken');
+  return captureApiToken ? {id_token: captureApiToken} : null;
+}
+
+async function captureReadiness() {
+  const [{enabled}, {machineAssignment}] = await Promise.all([
+    chrome.storage.local.get('enabled'), chrome.storage.session.get('machineAssignment')]);
+  const configured = !CLOUD || cloudConfigured();
+  const authSessionValid = Boolean(await credentials());
+  const keyMatches = machineAssignment?.key_matches === true;
+  const subjectBound = !CLOUD || machineAssignment?.subject_bound === true;
+  const machineAssignmentComplete = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
+    machineAssignment?.department_code && keyMatches && subjectBound);
+  const captureEnabled = enabled === true;
+  return {cloud_configured: configured, capture_enabled: captureEnabled,
+    auth_session_valid: authSessionValid, machine_assignment_complete: machineAssignmentComplete,
+    key_matches: keyMatches, subject_bound: subjectBound,
+    capture_allowed: configured && captureEnabled && authSessionValid && machineAssignmentComplete};
+}
+
+async function captureAllowed() {
+  return (await captureReadiness()).capture_allowed;
+}
+
+async function closeCloudSession(reason) {
+  if (!CLOUD) return;
+  await chrome.storage.session.remove(['googleSession', 'machineAssignment', 'machineInfo']);
+  await chrome.storage.session.set({authProblem: reason});
+  await chrome.storage.local.set({enabled: false});
+  await broadcastPolicy();
+  await updateProbeConfig(false);
+}
+
+async function googleLogin() {
+  if (!cloudConfigured()) throw new Error('Configure a URL HTTPS da API e o cliente OAuth antes do login.');
+  await closeCloudSession('Login Google em andamento.');
+  const redirect_uri = chrome.identity.getRedirectURL();
+  const code_verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const code_challenge = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256',
+    new TextEncoder().encode(code_verifier))));
+  const state = crypto.randomUUID();
+  const nonce = crypto.randomUUID();
+  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  url.search = new URLSearchParams({client_id: CONFIG.googleClientId, redirect_uri, response_type: 'code',
+    scope: 'openid email', code_challenge, code_challenge_method: 'S256', state, nonce,
+    hd: 'castelobrancocontabilidade.com.br'}).toString();
+  const returned = await chrome.identity.launchWebAuthFlow({url: url.href, interactive: true});
+  if (!returned) throw new Error('Login Google não concluído.');
+  const callback = new URL(returned);
+  const expected = new URL(redirect_uri);
+  if (callback.origin !== expected.origin || callback.pathname !== expected.pathname ||
+      callback.searchParams.get('state') !== state || !callback.searchParams.get('code') ||
+      callback.searchParams.has('error')) throw new Error('Resposta de login Google inválida.');
+  const response = await fetch(`${API}/v1/auth/google-code`, {method: 'POST', signal: AbortSignal.timeout(10_000),
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code: callback.searchParams.get('code'), code_verifier, nonce, redirect_uri})});
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`HTTP ${response.status}${data.detail ? `: ${data.detail}` : ''}`);
+  if (typeof data.id_token !== 'string' || data.id_token.split('.').length !== 3 ||
+      !Number.isSafeInteger(data.exp) || data.exp * 1000 <= Date.now() ||
+      typeof data.email !== 'string' || typeof data.sub !== 'string' || !data.sub.trim() ||
+      data.sub.length > 255) throw new Error('Sessão inválida recebida da API.');
+  await chrome.storage.session.set({googleSession: {id_token: data.id_token, email: data.email,
+    sub: data.sub, exp: data.exp},
+    authProblem: null});
+  await broadcastPolicy();
+  return {email: data.email, sub: data.sub, exp: data.exp};
+}
 
 function captureErrorCode(error) {
   const message = String(error?.message || '');
@@ -90,38 +180,49 @@ async function loadMachineAssignment() {
   const decode = value => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=')), c => c.charCodeAt(0));
   const point = machinePublicKey ? new Uint8Array([4, ...decode(machinePublicKey.x), ...decode(machinePublicKey.y)]) : null;
   const fingerprint = point ? hex(new Uint8Array(await crypto.subtle.digest('SHA-256', point))) : null;
-  const assignment = fingerprint === result.key_fingerprint && typeof result.person_name === 'string' && result.person_name.trim()
-    ? result : null;
+  const assignment = fingerprint === result.key_fingerprint && typeof result.person_name === 'string' && result.person_name.trim() &&
+    typeof result.employee_id === 'string' && result.employee_id.trim() &&
+    typeof result.department_code === 'string' && result.department_code.trim()
+    ? {...result, key_matches: true, subject_bound: CLOUD} : null;
   await chrome.storage.session.set({machineAssignment: assignment});
   await chrome.storage.session.set({machineInfo: {...result, key_matches: fingerprint === result.key_fingerprint}});
   return assignment ? {...result, key_matches: true} : {...result, key_matches: fingerprint === result.key_fingerprint};
 }
 
 async function broadcastPolicy() {
-  const {machineAssignment} = await chrome.storage.session.get('machineAssignment');
+  const allowed = await captureAllowed();
+  const {googleSession} = CLOUD ? await chrome.storage.session.get('googleSession') : {};
   for (const port of policyPorts) {
     try { port.postMessage({type: 'block_policy', blocked: false,
-      machineAssigned: Boolean(machineAssignment?.person_name)}); }
+      machineAssigned: allowed, authExpiresAt: CLOUD ? googleSession?.exp * 1000 || 0 : null}); }
     catch { policyPorts.delete(port); }
   }
 }
 
 async function sendToApi(path, options = {}) {
   await ready;
-  const {mainApiToken: token = ''} = await chrome.storage.session.get('mainApiToken');
+  if (CLOUD && !cloudConfigured()) throw new Error('Configuração OAuth da nuvem incompleta.');
+  const identity = await credentials();
+  if (CLOUD && !identity && path !== '/health') {
+    await closeCloudSession('Sessão Google ausente ou expirada. Entre novamente.');
+    throw new Error('Sessão Google ausente ou expirada. Entre novamente.');
+  }
   const method = options.method || 'GET';
   const bodyText = options.body || '';
-  const signed = method === 'POST' && (path === '/v1/stream-captures' ||
+  const signed = (method === 'GET' && /^\/v1\/machines\/[0-9a-f-]{36}$/i.test(path)) ||
+    (method === 'POST' && (path === '/v1/stream-captures' ||
     path === '/v1/artifact-metadata' || path === '/v1/interactions' ||
-    /^\/v1\/interactions\/[0-9a-f-]{36}\/response$/i.test(path));
+    /^\/v1\/interactions\/[0-9a-f-]{36}\/response$/i.test(path)));
   const signedHeaders = signed ? await machineHeaders(path, method, bodyText) : {};
   const response = await fetch(`${API}${path}`, {
     ...options,
     signal: AbortSignal.timeout(10_000),
-    headers: {'Content-Type': 'application/json', ...(token ? {Authorization: `Bearer ${token}`} : {}),
+    headers: {'Content-Type': 'application/json', ...(identity ? {Authorization: `Bearer ${identity.id_token}`} : {}),
       ...signedHeaders, ...options.headers}
   });
   const data = await response.json().catch(() => ({}));
+  if (CLOUD && (response.status === 401 || response.status === 403))
+    await closeCloudSession('Acesso Google recusado. Entre novamente ou solicite a atribuição da instalação.');
   if (!response.ok) throw new Error(`HTTP ${response.status}${data.detail ? `: ${data.detail}` : ''}`);
   return data;
 }
@@ -130,17 +231,35 @@ async function status() {
   await ready;
   const config = await chrome.storage.local.get(['enabled', 'lastCaptures', 'lastArtifacts', 'captureDiagnostics']);
   const {installationId} = await chrome.storage.local.get('installationId');
-  const {mainApiToken: token = ''} = await chrome.storage.session.get('mainApiToken');
+  let identity = await credentials();
   let {machineAssignment = null, machineInfo = null} = await chrome.storage.session.get(['machineAssignment', 'machineInfo']);
-  if (token) {
+  if (!identity) machineAssignment = null;
+  if (identity) {
     try {
       const current = await loadMachineAssignment();
       machineInfo = current;
-      machineAssignment = current?.person_name && current?.key_matches ? current : null;
-    } catch {}
+      machineAssignment = current?.person_name && current?.employee_id && current?.department_code &&
+        current?.key_matches ? {...current, subject_bound: CLOUD} : null;
+    } catch {
+      machineAssignment = null;
+      await chrome.storage.session.set({machineAssignment: null});
+      identity = await credentials();
+    }
+  }
+  const fullyAssigned = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
+    machineAssignment?.department_code && machineAssignment?.key_matches === true &&
+    (!CLOUD || machineAssignment.subject_bound === true));
+  if (config.enabled === true && (!identity || !fullyAssigned)) {
+    config.enabled = false;
+    await chrome.storage.local.set({enabled: false});
+    await updateProbeConfig(false);
   }
   await broadcastPolicy();
-  return {enabled: config.enabled === true && Boolean(machineAssignment?.person_name), configured: Boolean(token), installationId, machineAssignment, machineInfo,
+  const {authProblem = null} = await chrome.storage.session.get('authProblem');
+  return {enabled: config.enabled === true && Boolean(identity) && fullyAssigned,
+    configured: CLOUD ? cloudConfigured() : Boolean(identity), cloud: CLOUD,
+    email: CLOUD ? identity?.email || null : null, sub: CLOUD ? identity?.sub || null : null,
+    authProblem, installationId, machineAssignment, machineInfo,
     lastCaptures: config.lastCaptures || [],
     lastArtifacts: config.lastArtifacts || [], captureDiagnostics: config.captureDiagnostics || []};
 }
@@ -195,25 +314,44 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     const page = isChatPage(sender);
 
     if (popup && message.type === 'status') return status();
+    if (popup && message.type === 'login') {
+      if (!CLOUD) throw new Error('Login Google disponível apenas no modo nuvem.');
+      const account = await googleLogin();
+      await registerAndLoadMachine();
+      await broadcastPolicy();
+      return account;
+    }
+    if (popup && message.type === 'logout') {
+      await closeCloudSession('Você saiu da conta Google.');
+      return {signedOut: true};
+    }
     if (popup && message.type === 'save') {
       if (typeof message.token !== 'string') throw new Error('Token inválido.');
       const suppliedToken = message.token.trim();
-      const {mainApiToken: currentToken = ''} = await chrome.storage.session.get('mainApiToken');
+      const {captureApiToken: currentToken = ''} = CLOUD ? {} : await chrome.storage.session.get('captureApiToken');
+      if (CLOUD && suppliedToken) throw new Error('Token local não é aceito no modo nuvem.');
       if (suppliedToken && suppliedToken.length < 24) throw new Error('O token precisa ter pelo menos 24 caracteres.');
-      if (message.enabled === true && !suppliedToken && !currentToken)
-        throw new Error('Informe o LAB_API_TOKEN da API principal em backend/.env (mínimo de 24 caracteres).');
-      if (suppliedToken) await chrome.storage.session.set({mainApiToken: suppliedToken});
+      if (!CLOUD && message.enabled === true && !suppliedToken && !currentToken)
+        throw new Error('Informe o CAPTURE_API_TOKEN definido em backend/.env (mínimo de 24 caracteres).');
+      if (suppliedToken) await chrome.storage.session.set({captureApiToken: suppliedToken});
       let enableCapture = message.enabled === true;
       if (enableCapture) {
+        if (CLOUD && !await credentials()) throw new Error('Entre com sua conta Google antes de ativar a captura.');
         const assignment = await registerAndLoadMachine();
-        await broadcastPolicy();
-        if (!assignment.person_name || assignment.key_matches !== true) {
+        if (!assignment.person_name || !assignment.employee_id || !assignment.department_code || assignment.key_matches !== true) {
           await chrome.storage.local.set({enabled: false});
           await updateProbeConfig(false);
-          throw new Error(`Instalação ${assignment.installation_id} cadastrada; aguardando atribuição do colaborador.`);
+          const missing = [
+            !assignment.person_name && 'nome do colaborador',
+            !assignment.employee_id && 'ID do colaborador',
+            !assignment.department_code && 'código do departamento',
+            assignment.key_matches !== true && 'conferência da chave da instalação'
+          ].filter(Boolean).join(', ');
+          throw new Error(`Captura pausada: falta atribuir ${missing}. Peça ao operador para completar a atribuição no backend.`);
         }
       }
       await chrome.storage.local.set({enabled: enableCapture});
+      await broadcastPolicy();
       await updateProbeConfig(enableCapture);
       return {saved: true};
     }
@@ -225,8 +363,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (popup && message.type === 'health') return sendToApi('/health');
 
     if (page && message.type === 'probe_config') {
-      const config = await chrome.storage.local.get('enabled');
-      return {enabled: config.enabled === true};
+      return {enabled: await captureAllowed()};
     }
 
     if (page && ['remember_turn', 'lookup_turn'].includes(message.type)) {
@@ -247,9 +384,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }
 
     if (page && message.type === 'capture_prompt') {
-      const {enabled} = await chrome.storage.local.get('enabled');
       const item = message.payload;
-      if (enabled !== true) throw new Error('CAPTURE_PAUSED');
+      if (!await captureAllowed()) throw new Error('CAPTURE_PAUSED');
       if (!item || item.platform !== 'chatgpt_web' ||
           !/^[0-9a-f-]{36}$/i.test(item.client_event_id || '') ||
           typeof item.prompt?.text !== 'string' || !validAttachmentObservation(item) ||
@@ -266,9 +402,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }
 
     if (page && message.type === 'capture_response') {
-      const {enabled} = await chrome.storage.local.get('enabled');
       const item = message.payload;
-      if (enabled !== true || !/^[0-9a-f-]{36}$/i.test(message.interactionId || '') ||
+      if (!await captureAllowed() || !/^[0-9a-f-]{36}$/i.test(message.interactionId || '') ||
           !item || !/^[0-9a-f-]{36}$/i.test(item.client_event_id || '') ||
           typeof item.text !== 'string' || !item.text || item.text.length > 100_000 ||
           !['complete', 'incomplete'].includes(item.capture_status) || item.adapter_version !== '0.4.6')
@@ -281,8 +416,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }
 
     if (page && message.type === 'artifact_metadata') {
-      const config = await chrome.storage.local.get('enabled');
-      if (config.enabled !== true) throw new Error('Captura pausada na extensão.');
+      if (!await captureAllowed()) throw new Error('Captura pausada na extensão.');
       const item = message.payload;
       if (!item || typeof item.artifact_id !== 'string' || item.platform !== 'chatgpt_web' ||
           item.source !== 'download_headers' ||
@@ -323,8 +457,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const item = message.payload;
       await recordDiagnostic('capture_received', {capture_status: item?.capture_status || 'invalid',
         frames: item?.frames ?? null, bytes: item?.bytes ?? null});
-      const config = await chrome.storage.local.get('enabled');
-      if (config.enabled !== true) throw new Error('Captura pausada na extensão.');
+      if (!await captureAllowed()) throw new Error('Captura pausada na extensão.');
       if (!item || typeof item.capture_id !== 'string' ||
           !Number.isSafeInteger(item.response_chars) || item.response_chars <= 0 || item.response_chars > 100_000 ||
           Object.hasOwn(item, 'prompt_text') || Object.hasOwn(item, 'response_text') ||
@@ -367,6 +500,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         ? item.content_kind : 'unknown';
       details.has_body = item.has_body === true;
       details.reader_aborted_after_done = item.reader_aborted_after_done === true;
+      details.assistant_finished = item.assistant_finished === true;
+      details.assistant_end_turn = item.assistant_end_turn === true;
+      details.assistant_active = item.assistant_active === true;
       details.event_types = Array.isArray(item.event_types) ? item.event_types.slice(0, 8) : [];
       details.event_shapes = Array.isArray(item.event_shapes) ? item.event_shapes.slice(0, 8) : [];
       details.event_keys = Array.isArray(item.event_keys) ? item.event_keys.slice(0, 8) : [];
@@ -379,22 +515,26 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (page && message.type === 'prompt_decision') {
       const actions = new Set(['ALLOW', 'WARN', 'REVIEW', 'BLOCK']);
       const rules = new Set(['R01', 'R02', 'R03', 'R04', 'R05', 'R06', 'R07', 'R08', 'R09', 'LIMIT', 'ENGINE', 'MANUAL', 'MACHINE', 'SYNC']);
-      const methods = new Set(['click', 'enter', 'submit', 'regenerate']);
+      const methods = new Set(['click', 'enter', 'submit', 'regenerate', 'network']);
       if (message.version !== '0.1.2' || message.destination !== 'not_approved' || !actions.has(message.action) ||
           !methods.has(message.method) || !Array.isArray(message.findings) || message.findings.length > 12 ||
           !message.findings.every(item => rules.has(item.rule) && actions.has(item.action) &&
             Number.isSafeInteger(item.count) && item.count >= 1 && item.count <= 100))
         throw new Error('Decisão de política inválida.');
       await recordDiagnostic('policy_decision', {action: message.action, method: message.method,
-        findings: message.findings.map(({rule, action, count}) => ({rule, action, count}))});
+        findings: message.findings.map(({rule, action, count}) => ({rule, action, count})),
+        ...await captureReadiness()});
       return {logged: true};
     }
     if (page && message.type === 'blocker_health') {
-      if (typeof message.mainActive !== 'boolean' || typeof message.blocked !== 'boolean')
+      if (typeof message.mainActive !== 'boolean' || typeof message.blocked !== 'boolean' ||
+          typeof message.synchronized !== 'boolean' || typeof message.machineAssigned !== 'boolean' ||
+          typeof message.authExpired !== 'boolean')
         throw new Error('Estado do bloqueio inválido.');
       await recordDiagnostic('blocker_health', {main_active: message.mainActive,
-        machine_assigned: message.synchronized === true && message.blocked === false,
-        network_gate_blocked: message.mainBlocked === true});
+        policy_synchronized: message.synchronized, page_capture_allowed: message.machineAssigned,
+        auth_expired: message.authExpired, network_gate_blocked: message.mainBlocked === true,
+        ...await captureReadiness()});
       return {logged: true};
     }
     if (page && message.type === 'prompt_blocked') {
@@ -424,10 +564,15 @@ chrome.runtime.onConnect.addListener(port => {
     if (message?.type !== 'block_status') return;
     try {
       port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false});
-      const assignment = await loadMachineAssignment();
+      if (await credentials()) await loadMachineAssignment();
       port.postMessage({type: 'block_policy', blocked: false,
-        machineAssigned: Boolean(assignment?.person_name && assignment?.key_matches === true)});
+        machineAssigned: await captureAllowed(), authExpiresAt: CLOUD
+          ? (await chrome.storage.session.get('googleSession')).googleSession?.exp * 1000 || 0 : null});
     } catch {
+      await chrome.storage.session.set({machineAssignment: null});
+      await chrome.storage.local.set({enabled: false});
+      await broadcastPolicy();
+      await updateProbeConfig(false);
       try { port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false}); } catch { policyPorts.delete(port); }
     }
   });

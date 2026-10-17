@@ -3,8 +3,8 @@
   "name": "POC de captura de stream local",
   "version": "0.4.6",
   "description": "Captura prompts pelo editor e respostas pelo stream, atribuídos à instalação.",
-  "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://chatgpt.com/*", "http://127.0.0.1:8000/*"],
+  "permissions": ["storage", "tabs", "identity"],
+  "host_permissions": ["https://chatgpt.com/*", "https://asked-switching-poly-trackback.trycloudflare.com/*"],
   "background": {"service_worker": "src/background/service-worker.js", "type": "module"},
   "action": {"default_popup": "src/popup/popup.html"},
   "content_scripts": [

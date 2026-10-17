@@ -1,4 +1,5 @@
 const $ = id => document.getElementById(id);
+let currentConfig;
 async function send(message) {
   const result = await chrome.runtime.sendMessage(message);
   if (!result?.ok) throw new Error(result?.error || 'Sem resposta da extensão.');
@@ -6,9 +7,20 @@ async function send(message) {
 }
 async function refresh() {
   const config = await send({type: 'status'});
+  currentConfig = config;
   $('enabled').checked = config.enabled;
+  $('cloud-login').hidden = !config.cloud;
+  $('local-token').hidden = config.cloud;
+  $('login').disabled = config.cloud && !config.configured;
+  $('logout').disabled = !config.email;
+  $('account').textContent = config.cloud
+    ? config.email ? `Conta Google: ${config.email}` : config.authProblem ||
+      (config.configured ? 'Entre com sua conta Google individual.' : 'Configuração OAuth da nuvem incompleta.')
+    : '';
+  $('account-sub').hidden = !config.sub;
+  $('sub').textContent = config.sub || '';
   const machineInfo = config.machineInfo;
-  $('identity').textContent = `Instalação: ${config.installationId}\nColaborador: ${machineInfo?.person_name || 'aguardando atribuição'}\nFingerprint: ${machineInfo?.key_fingerprint || 'cadastre a instalação'}\nChave: ${machineInfo?.key_matches === false ? 'diverge do cadastro' : machineInfo?.key_matches ? 'conferida' : 'não verificada'}`;
+  $('identity').textContent = `Instalação: ${config.installationId}\nColaborador: ${machineInfo?.person_name || 'aguardando atribuição'}\nID: ${machineInfo?.employee_id || 'pendente'}\nDepartamento: ${machineInfo?.department_code || 'pendente'}\nFingerprint: ${machineInfo?.key_fingerprint || 'cadastre a instalação'}\nChave: ${machineInfo?.key_matches === false ? 'diverge do cadastro' : machineInfo?.key_matches ? 'conferida' : 'não verificada'}`;
   $('captures').textContent = config.lastCaptures.length
     ? config.lastCaptures.slice().reverse().map(item => `${item.observed_at}  ${item.status}  ${item.bytes} B  ${item.frames} frames`).join('\n')
     : 'Nenhuma captura ainda.';
@@ -42,6 +54,18 @@ $('config').addEventListener('submit', async event => {
     $('status').textContent = 'Configuração salva. Recarregue a aba do ChatGPT.';
     await refresh();
   } catch (error) { $('status').textContent = error.message; }
+});
+$('login').addEventListener('click', async () => {
+  try {
+    if (!currentConfig?.configured) throw new Error('Configuração OAuth da nuvem incompleta.');
+    await send({type: 'login'});
+    $('status').textContent = 'Conta Google conectada. Confira a atribuição da instalação antes de ativar a captura.';
+    await refresh();
+  } catch (error) { $('status').textContent = error.message; }
+});
+$('logout').addEventListener('click', async () => {
+  try { await send({type: 'logout'}); await refresh(); }
+  catch (error) { $('status').textContent = error.message; }
 });
 $('health').addEventListener('click', async () => {
   try { const data = await send({type: 'health'}); $('status').textContent = `API disponível (schema ${data.schema_version}).`; }

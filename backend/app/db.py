@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 from .settings import Settings
 
-SCHEMA_VERSION = "0.5"
+SCHEMA_VERSION = "0.8"
 
 
 def utc_now() -> datetime:
@@ -171,6 +171,44 @@ def initialize(settings: Settings) -> None:
             if name not in artifact_columns:
                 db.execute(f"ALTER TABLE artifact_metadata ADD COLUMN {name} TEXT")
         db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.5', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+        for table in ("machines", "interactions", "stream_captures", "artifact_metadata"):
+            columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+            for name in ("employee_id", "department_code"):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} TEXT")
+        interaction_columns = {row["name"] for row in db.execute("PRAGMA table_info(interactions)")}
+        for name, declaration in (("usage_context", "TEXT NOT NULL DEFAULT 'unknown'"),
+                                  ("usage_context_source", "TEXT NOT NULL DEFAULT 'unknown'")):
+            if name not in interaction_columns:
+                db.execute(f"ALTER TABLE interactions ADD COLUMN {name} {declaration}")
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.6', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+        machine_columns = {row["name"] for row in db.execute("PRAGMA table_info(machines)")}
+        for name in ("google_sub", "revoked_at"):
+            if name not in machine_columns:
+                db.execute(f"ALTER TABLE machines ADD COLUMN {name} TEXT")
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.7', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS departments (
+                department_code TEXT PRIMARY KEY,
+                department_name TEXT NOT NULL,
+                active INTEGER NOT NULL CHECK (active IN (0, 1)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS employees (
+                employee_id TEXT PRIMARY KEY,
+                person_name TEXT NOT NULL,
+                department_code TEXT NOT NULL REFERENCES departments(department_code),
+                active INTEGER NOT NULL CHECK (active IN (0, 1)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_employees_department ON employees(department_code, active);
+            INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+            VALUES ('0.8', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            """
+        )
 
 
 def json_dump(value: Any) -> str:

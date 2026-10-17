@@ -90,6 +90,8 @@ class InteractionCreate(BaseModel):
     schema_version: Literal["0.1"]
     client_event_id: UUID
     platform: Literal["chatgpt_web", "claude_web"]
+    usage_context: Literal["work", "chat", "unknown"] = "unknown"
+    usage_context_source: Literal["interface_marker", "unknown"] = "unknown"
     device_installation_id: UUID
     account_label: str | None = Field(default=None, max_length=320)
     project: ObservedField
@@ -100,6 +102,14 @@ class InteractionCreate(BaseModel):
     attachments_truncated: bool = False
     adapter_version: str = Field(min_length=1, max_length=64)
     observed_at: datetime
+
+    @model_validator(mode="after")
+    def validate_usage_context_source(self) -> "InteractionCreate":
+        if self.usage_context == "unknown" and self.usage_context_source != "unknown":
+            raise ValueError("unknown usage context requires unknown source")
+        if self.usage_context != "unknown" and self.usage_context_source != "interface_marker":
+            raise ValueError("observed usage context requires interface marker source")
+        return self
 
     @model_validator(mode="after")
     def validate_attachment_observation(self) -> "InteractionCreate":
@@ -295,7 +305,7 @@ class StreamCaptureAccepted(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
-    schema_version: Literal["0.5"]
+    schema_version: str
 
 
 class InteractionDetail(BaseModel):
@@ -305,6 +315,10 @@ class InteractionDetail(BaseModel):
     platform: str
     account_label: str | None
     attributed_person: str | None = None
+    employee_id: str | None = None
+    department_code: str | None = None
+    usage_context: str = "unknown"
+    usage_context_source: str = "unknown"
     project_id: str | None = None
     machine_key_fingerprint: str | None = None
     project: dict[str, Any]

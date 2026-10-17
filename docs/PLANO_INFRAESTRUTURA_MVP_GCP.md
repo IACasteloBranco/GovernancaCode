@@ -32,7 +32,7 @@ Use uma VM do Compute Engine e um Persistent Disk conectado à mesma VM. O proce
 | Persistent Disk | Disco de dados separado do ciclo de vida da VM, montado em diretório dedicado. | Um único host acessa o banco. O tipo e o tamanho ficam para o cálculo de custo. |
 | Backend | Python 3.11+, FastAPI e Uvicorn, executados por `systemd`. | Um worker. A aplicação escuta apenas em `127.0.0.1:8000`. |
 | Proxy HTTPS | Caddy ou Nginx termina TLS e encaminha para a API local. | O acesso à API fica restrito à VPN ou à faixa de rede aprovada. |
-| Segredos | Secret Manager fornece ao backend as credenciais necessárias por uma conta de serviço com acesso mínimo. | Separe a credencial de captura da credencial de operador antes de distribuí-las ao grupo. |
+| Segredos | Secret Manager fornece ao backend o segredo do cliente OAuth por uma conta de serviço com acesso mínimo. | Nenhum segredo OAuth entra na extensão; os tokens compartilhados servem apenas ao modo local. |
 | Logs | Cloud Logging recebe logs técnicos sem corpo de requisição, prompts, respostas, cookies ou tokens. | Não enviar payloads ao sistema de logs. |
 | Backup | Rotina gera cópia consistente do SQLite e armazena em bucket separado. | Retenção e eliminação das cópias precisam de decisão humana antes do uso. |
 | Extensão | Pacote instalado nos navegadores do grupo por procedimento controlado. | Não hospedar código executável da extensão no backend. |
@@ -46,32 +46,34 @@ O Compute Engine mantém discos persistentes separados da VM. Isso permite mante
 3. Restrinja SSH ao caminho administrativo aprovado pela equipe de infraestrutura. Não use regras de firewall abertas a `0.0.0.0/0` para administração.
 4. Reserve um nome DNS para a API e configure um certificado TLS válido para esse nome. Mantenha Uvicorn ligado ao loopback da VM.
 5. Dê à conta de serviço da VM somente permissão para ler o segredo do laboratório e gravar backups, se a rotina de backup precisar dessa permissão.
-6. Mantenha segredos fora do pacote da extensão, do repositório, dos logs e das imagens de máquina. Entregue a credencial de captura somente ao grupo de teste.
-7. Separe a credencial de captura da credencial que consulta interações e metadados. A extensão recebe apenas a credencial de captura. Mantenha a credencial de operador em um meio que não seja distribuído aos participantes.
+6. Mantenha o segredo OAuth fora do pacote da extensão, do repositório, dos logs e das imagens de máquina.
+7. No piloto, use login individual Google Workspace. Configure no servidor o `sub` aprovado do único operador e o código oficial do setor Contábil para limitar as consultas.
 
-O backend atual usa o mesmo `LAB_API_TOKEN` nas rotas de captura e nas consultas administrativas. O README também registra que a assinatura da instalação não comprova a identidade física de quem usa o dispositivo. Separe as permissões antes de entregar o token aos participantes. Não exponha a API à internet antes dessa mudança e de uma revisão de autenticação individual.
+No modo `lab`, a API valida o ID token Google e vincula o `sub` à chave da instalação. A assinatura comprova a chave do perfil do navegador, não a posse física do computador. O operador autorizado consulta somente os registros do setor piloto. O login deve usar conta individual; `contabil@...`, por ser compartilhada, não permite atribuir ações a uma pessoa. O endpoint HTTPS, o cliente OAuth e a lista aprovada de participantes ainda dependem da TI e do responsável pelo piloto.
+
+Para este piloto, configure `PILOT_DEPARTMENT_CODE=FgXMby6awkvcKxQjk04Yr4sAz2mSdMTZ`, código do Contábil na linha 8 da [planilha corporativa de departamentos](https://docs.google.com/spreadsheets/d/1i06KE4iG0AYKDll_vZETnJNwHp5fPrrfCX4eTAalQsk/edit). Não importe a lista de funcionários para o repositório.
 
 ## Ajustes necessários na aplicação
 
 1. Substitua a URL fixa `http://127.0.0.1:8000` da extensão por uma configuração de ambiente HTTPS para o endereço aprovado da API.
 2. Atualize `host_permissions` no manifesto da extensão para autorizar esse domínio HTTPS. Preserve a configuração local usada no desenvolvimento.
 3. Configure `DATABASE_PATH` para o diretório montado no Persistent Disk. Mantenha o arquivo e os auxiliares do SQLite fora do sistema de arquivos temporário.
-4. Configure `APP_ENV=lab`, `LAB_API_TOKEN`, os limites de payload e `RETENTION_DAYS` por mecanismo protegido no host.
+4. Configure `APP_ENV=lab`, cliente e segredo OAuth, URI de redirecionamento, `GOOGLE_OPERATOR_SUB`, `PILOT_DEPARTMENT_CODE`, os limites de payload e `RETENTION_DAYS` por mecanismo protegido no host. Os tokens compartilhados ficam restritos ao desenvolvimento local.
 5. Mantenha CORS vazio enquanto a extensão chamar a API pelo service worker, conforme o README atual. Confirme as permissões de host da extensão no teste de integração.
 6. Mantenha a API em um único worker. Não aumente réplicas antes de migrar o banco para um servidor cliente-servidor.
-7. Separe no backend as permissões de captura e de consulta administrativa. A credencial configurada na extensão não pode consultar prompts, respostas ou listas recentes.
+7. Confirme o `sub` da conta individual do operador e os vínculos dos participantes com o cadastro oficial antes de atribuir instalações. Revogue instalações quando o vínculo deixar de valer.
 
 Os pontos atuais da URL e das permissões estão em [`service-worker.js`](../extension/src/background/service-worker.js) e [`manifest.json`](../extension/manifest.json). O caminho do banco e as configurações ficam em [`settings.py`](../backend/app/settings.py).
 
 ## Etapas de implantação
 
 1. **Feche as decisões de acesso e custo.** Confirme o projeto e a conta de faturamento, a região, o grupo de teste, a VPN ou rede permitida e o orçamento mensal aprovado.
-2. **Prepare a extensão.** Faça os ajustes de URL e permissões HTTPS. Gere o pacote de laboratório e defina como a equipe distribuirá a extensão aos participantes.
+2. **Prepare a extensão.** Defina um ID estável, registre o redirecionamento OAuth correspondente, configure a URL HTTPS e a permissão exata do host da API. Gere o pacote de laboratório e defina como a equipe distribuirá a extensão aos participantes.
 3. **Crie os recursos GCP.** Crie a VM, a conta de serviço, as regras de firewall e o Persistent Disk. Configure alertas de orçamento antes de iniciar a VM.
 4. **Configure o host.** Instale as dependências fixadas, crie o usuário sem privilégios, monte o disco de dados e configure `systemd` e o proxy TLS.
-5. **Configure a API.** Carregue o segredo, inicialize o SQLite no disco persistente e inicie um único worker ligado a `127.0.0.1:8000`.
+5. **Configure a API.** Carregue o segredo OAuth, o `sub` do operador e o código do setor piloto; inicialize o SQLite no disco persistente e inicie um único worker ligado a `127.0.0.1:8000`.
 6. **Configure backup e restauração.** Gere um backup por método consistente com SQLite. Restaure uma cópia em ambiente temporário e confirme que o serviço volta a consultar os registros sintéticos.
-7. **Execute o piloto.** Cadastre e atribua as instalações participantes. Teste saúde, captura, consulta administrativa, retenção, indisponibilidade e reinício da VM com dados sintéticos.
+7. **Execute o piloto.** Cadastre e atribua instalações a contas individuais. Teste login, captura, consulta limitada ao Contábil, token vencido, troca de conta, revogação, retenção, indisponibilidade e reinício da VM com dados sintéticos.
 8. **Encerre o laboratório.** Revogue o token, pare a VM e elimine o banco, o disco e as cópias de backup conforme a decisão aprovada de retenção.
 
 ## Critérios para iniciar o piloto
@@ -79,7 +81,8 @@ Os pontos atuais da URL e das permissões estão em [`service-worker.js`](../ext
 - O grupo acessa a API somente pela rede aprovada e recebe resposta HTTPS válida.
 - O backend aceita a extensão de laboratório e persiste eventos sintéticos após reinício do processo e da VM.
 - O banco não fica acessível pela rede.
-- A credencial da extensão não consulta interações nem metadados recentes.
+- Só o `sub` aprovado do operador consulta registros do Contábil; uma conta participante, externa ou compartilhada não recebe acesso de operador.
+- A API aceita captura somente com sessão Google válida, vínculo individual aprovado e assinatura da instalação; a revogação é recusada no servidor e a extensão se desativa ao receber a recusa.
 - Prompts, respostas, tokens e cookies não aparecem nos logs.
 - Um backup sintético foi restaurado com sucesso.
 - A retenção aprovada foi aplicada ao banco e às cópias de backup.
@@ -100,6 +103,10 @@ Cloud Run não é a escolha inicial para o código atual. Seu filesystem graváv
 
 ## Decisões pendentes
 
+- `POLICY_QUESTION`: quem aprova e confere os vínculos entre `sub`, funcionário e departamento no cadastro oficial? Não atribua a conta compartilhada `contabil@...` a uma pessoa.
+- `POLICY_QUESTION`: o operador terá acesso ao texto bruto de prompts e respostas do Contábil, ou apenas a metadados? O endpoint de detalhe expõe texto bruto quando autorizado.
+- A TI precisa fornecer o cliente OAuth, segredo, URI de redirecionamento para o ID estável da extensão e o endereço HTTPS da API. O operador precisa obter seu `sub` pelo login individual.
+- Definir e testar o cliente usado pelo operador para consultar a API com seu ID token; ainda não há interface administrativa dedicada.
 - `POLICY_QUESTION`: o prazo de retenção de sete dias também vale para snapshots e backups? Até a decisão, mantenha os backups limitados a dados sintéticos e apague-os ao encerrar o piloto.
 - Qual projeto e conta de faturamento da empresa serão usados?
 - A região será São Paulo? A equipe de segurança ou governança tem requisito de localização de dados?

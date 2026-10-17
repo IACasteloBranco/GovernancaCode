@@ -10,8 +10,22 @@ O stream bruto, cookies, cabeçalhos de autenticação e bytes de arquivos não 
 
 1. Inicie o backend em `backend/` com `.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000`.
 2. Em `chrome://extensions`, carregue ou recarregue a pasta `extension` como extensão descompactada. Recarregue também a aba do ChatGPT após uma atualização da extensão.
-3. No popup, configure o `LAB_API_TOKEN` definido em `backend/.env`, cadastre e atribua a instalação a uma pessoa, e habilite a captura.
+3. No popup, configure somente o `CAPTURE_API_TOKEN` definido em `backend/.env`. Atribua a instalação pelo backend com ID do colaborador e código do departamento antes de habilitar a captura. O token de operador nunca deve ser colocado na extensão.
 4. Faça ensaios somente com conteúdo sintético. O bloqueador mantém o envio fechado quando a política ou a atribuição não está disponível.
+
+## Piloto com Google Workspace
+
+O modo `cloud` usa login individual pelo Google Workspace e exige uma instalação atribuída à mesma conta no backend. Para preparar o pacote, a TI deve:
+
+1. Criar um cliente OAuth do tipo **Aplicativo da Web**, com o URI de redirecionamento exato retornado por `chrome.identity.getRedirectURL()` para o ID estável desta extensão. Configurar no backend o mesmo client ID e o segredo do cliente. O segredo nunca entra na extensão.
+2. Preencher `mode: 'cloud'`, `apiUrl` com a origem HTTPS da API e `googleClientId` em `src/background/config.js`. A origem deve ser a URL sem caminho nem barra final.
+3. Acrescentar **somente essa origem** em `host_permissions` de `manifest.json`, com `/*` ao final. Manter o ID da extensão estável no pacote distribuído.
+
+Com a configuração incompleta, o login e a captura em nuvem ficam indisponíveis. No popup, a pessoa entra explicitamente com sua conta, atualiza a identificação da instalação e só então ativa a captura. A extensão conserva o ID token apenas em `chrome.storage.session`; expiração, ausência de sessão ou `401`/`403` da API fecham o bloqueio e exigem novo login. A API deve validar o token Google e conferir que o `sub` da conta está vinculado à instalação em `GET /v1/machines/{installation_id}`. Uma conta compartilhada não identifica o funcionário que fez o envio.
+
+Após o primeiro login do operador, o popup mostra o **Identificador Google (sub)**. O operador deve fornecer esse valor à TI pelo canal interno aprovado para configurar `GOOGLE_OPERATOR_SUB` no backend. O popup não mostra o ID token nem o segredo OAuth.
+
+O modo `local` mantém o token `CAPTURE_API_TOKEN` para desenvolvimento em `127.0.0.1`. Não distribua esse modo como pacote do piloto.
 
 O coordenador registra o prompt ao liberar o envio e vincula seu ID ao primeiro POST de conversa. A sonda lê `response.clone()` sem alterar o stream consumido pelo ChatGPT. O texto é reconstruído por mensagem do assistente e índice de bloco, aplicando snapshots e operações DPU conhecidas. A resposta recebe `complete` apenas com marcador `[DONE]` único, estado final do assistente, leitura encerrada ou aborto posterior ao marcador e ausência de truncamento. Uma interrupção ou formato não reconhecido fica `incomplete`.
 

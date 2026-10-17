@@ -15,12 +15,16 @@ from app.settings import get_settings
 
 TOKEN = "synthetic-test-token-not-for-real-use-0001"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+OPERATOR_TOKEN = "synthetic-operator-token-not-for-real-use-0002"
+OPERATOR_AUTH = {"Authorization": f"Bearer {OPERATOR_TOKEN}"}
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     db_path = tmp_path / "lab.sqlite3"
     monkeypatch.setenv("LAB_API_TOKEN", TOKEN)
+    monkeypatch.setenv("CAPTURE_API_TOKEN", TOKEN)
+    monkeypatch.setenv("OPERATOR_READ_TOKEN", OPERATOR_TOKEN)
     monkeypatch.setenv("DATABASE_PATH", str(db_path))
     monkeypatch.setenv("RETENTION_DAYS", "7")
     monkeypatch.setenv("MAX_PROMPT_CHARS", "100000")
@@ -55,18 +59,19 @@ def test_health_is_public_and_does_not_expose_internal_configuration(client):
     result = client.get("/health")
 
     assert result.status_code == 200
-    assert result.json() == {"status": "ok", "schema_version": "0.5"}
+    assert result.json() == {"status": "ok", "schema_version": "0.8"}
     assert client.get("/docs").status_code == 404
 
 
-def test_write_and_query_require_lab_token(client):
+def test_capture_and_operator_scopes_are_separate(client):
     created = client.post("/v1/interactions", json=interaction_payload())
 
     assert created.status_code == 401
     authorized = client.post("/v1/interactions", json=interaction_payload(), headers=AUTH)
     interaction_id = authorized.json()["interaction_id"]
-    queried = client.get(f"/v1/interactions/{interaction_id}")
+    queried = client.get(f"/v1/interactions/{interaction_id}", headers=AUTH)
     assert queried.status_code == 401
+    assert client.post("/v1/interactions", json=interaction_payload(), headers=OPERATOR_AUTH).status_code == 401
 
 
 def test_interaction_is_persisted_idempotently_and_conflicts_on_changed_payload(client):
@@ -84,9 +89,10 @@ def test_interaction_is_persisted_idempotently_and_conflicts_on_changed_payload(
     assert repeated.json()["duplicate"] is True
     assert repeated.json()["interaction_id"] == first.json()["interaction_id"]
     assert conflict.status_code == 409
-    detail = client.get(f"/v1/interactions/{first.json()['interaction_id']}", headers=AUTH)
+    detail = client.get(f"/v1/interactions/{first.json()['interaction_id']}", headers=OPERATOR_AUTH)
     assert detail.status_code == 200
     assert detail.json()["prompt"]["text"] == "Synthetic test prompt"
+
 
 def test_new_chat_persists_unknown_conversation_without_root_url(client):
     payload = interaction_payload()
@@ -104,7 +110,6 @@ def test_new_chat_persists_unknown_conversation_without_root_url(client):
         "name": None, "url": None, "capture_status": "unknown",
         "reason": "ID da conversa indisponível no momento do envio",
     }
-
 
 
 def test_response_capture_is_idempotent_and_attached_to_correct_interaction(client):
@@ -129,7 +134,7 @@ def test_response_capture_is_idempotent_and_attached_to_correct_interaction(clie
     conflict = client.post(
         f"/v1/interactions/{interaction_id}/response", json=changed, headers=AUTH
     )
-    detail = client.get(f"/v1/interactions/{interaction_id}", headers=AUTH)
+    detail = client.get(f"/v1/interactions/{interaction_id}", headers=OPERATOR_AUTH)
 
     assert first.status_code == 201
     assert repeated.status_code == 200 and repeated.json()["duplicate"] is True
@@ -194,11 +199,13 @@ def test_retention_removes_expired_interaction_and_related_records(client):
         assert db.execute("SELECT count(*) FROM interactions").fetchone()[0] == 0
         assert db.execute("SELECT count(*) FROM responses").fetchone()[0] == 0
         assert db.execute("SELECT count(*) FROM capture_events").fetchone()[0] == 0
-    assert client.get(f"/v1/interactions/{interaction_id}", headers=AUTH).status_code == 404
+    assert client.get(f"/v1/interactions/{interaction_id}", headers=OPERATOR_AUTH).status_code == 404
 
 
 def test_record_survives_api_restart(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_API_TOKEN", TOKEN)
+    monkeypatch.setenv("CAPTURE_API_TOKEN", TOKEN)
+    monkeypatch.setenv("OPERATOR_READ_TOKEN", OPERATOR_TOKEN)
     monkeypatch.setenv("MACHINE_SIGNATURE_REQUIRED", "false")
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "restart.sqlite3"))
     get_settings.cache_clear()
@@ -206,7 +213,7 @@ def test_record_survives_api_restart(tmp_path, monkeypatch):
         created = first_client.post("/v1/interactions", json=interaction_payload(), headers=AUTH)
         interaction_id = created.json()["interaction_id"]
     with TestClient(app) as restarted_client:
-        detail = restarted_client.get(f"/v1/interactions/{interaction_id}", headers=AUTH)
+        detail = restarted_client.get(f"/v1/interactions/{interaction_id}", headers=OPERATOR_AUTH)
     get_settings.cache_clear()
 
     assert detail.status_code == 200
@@ -234,7 +241,7 @@ def test_file_metadata_and_material_only_response_roundtrip(client, platform):
     route = f"/v1/interactions/{identifier}/response"
     assert client.post(route, json=response, headers=AUTH).status_code == 201
     assert client.post(route, json=response, headers=AUTH).json()["duplicate"]
-    detail = client.get(f"/v1/interactions/{identifier}", headers=AUTH).json()
+    detail = client.get(f"/v1/interactions/{identifier}", headers=OPERATOR_AUTH).json()
     assert detail["platform"] == platform
     assert detail["attachments_capture_status"] == "observed"
     assert detail["attachments"][0]["size_bytes"] == 12
@@ -277,6 +284,8 @@ def test_old_fingerprints_remain_idempotent_after_metadata_upgrade(client):
     legacy = dict(normalized)
     legacy.pop("attachments_capture_status")
     legacy.pop("attachments_truncated")
+    legacy.pop("usage_context")
+    legacy.pop("usage_context_source")
     legacy["attachments"] = [{k: v for k, v in item.items() if k not in ("size_bytes", "source")} for item in legacy["attachments"]]
     old_hash = hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
     assert fingerprint(normalized) == old_hash
@@ -301,8 +310,51 @@ def test_migration_preserves_old_records_with_unknown_file_observation(client):
         db.execute("DELETE FROM schema_migrations WHERE version = '0.3'")
     initialize(settings)
     initialize(settings)
-    detail = client.get(f"/v1/interactions/{identifier}", headers=AUTH).json()
+    detail = client.get(f"/v1/interactions/{identifier}", headers=OPERATOR_AUTH).json()
     assert detail["prompt"]["text"] == "Synthetic test prompt"
     assert detail["attachments_capture_status"] == "unavailable"
     assert detail["responses"][0]["text"] == "Old response"
     assert detail["responses"][0]["generated_materials"]["capture_status"] == "unavailable"
+
+
+def test_analytics_summary_is_operator_only_and_contains_no_content(client):
+    first = client.post("/v1/interactions", json=interaction_payload(), headers=AUTH).json()
+    second = client.post("/v1/interactions", json=interaction_payload(), headers=AUTH).json()
+    with connect(get_settings()) as db:
+        db.execute(
+            "UPDATE interactions SET attributed_person = ?, employee_id = ?, department_code = ? WHERE interaction_id = ?",
+            ("Pessoa Sintética A", "func-001", "dep-a", first["interaction_id"]),
+        )
+        db.execute(
+            "UPDATE interactions SET attributed_person = ?, employee_id = ?, department_code = ? WHERE interaction_id = ?",
+            ("Pessoa Sintética B", "func-002", "dep-b", second["interaction_id"]),
+        )
+    response = {
+        "client_event_id": str(uuid4()),
+        "text": "Resposta sintética que não pode aparecer no analytics",
+        "capture_status": "complete",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    client.post(f"/v1/interactions/{first['interaction_id']}/response", json=response, headers=AUTH)
+
+    assert client.get("/v1/admin/analytics/summary", headers=AUTH).status_code == 401
+    result = client.get("/v1/admin/analytics/summary", headers=OPERATOR_AUTH)
+
+    assert result.status_code == 200
+    body = result.json()
+    assert body["totals"] == {
+        "interactions": 2,
+        "responses": 1,
+        "complete_responses": 1,
+        "incomplete_responses": 0,
+        "stream_captures": 0,
+        "artifact_metadata": 0,
+    }
+    assert {item["employee_id"] for item in body["by_employee"]} == {"func-001", "func-002"}
+    assert {item["department_code"] for item in body["by_department"]} == {"dep-a", "dep-b"}
+    assert "Resposta sintética" not in result.text
+    assert "Synthetic test prompt" not in result.text
+    assert client.get(
+        "/v1/admin/analytics/summary?from=2026-10-18T00:00:00&to=2026-10-19T00:00:00Z",
+        headers=OPERATOR_AUTH,
+    ).status_code == 422

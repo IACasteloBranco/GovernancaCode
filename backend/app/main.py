@@ -2,6 +2,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import urllib.error
+import urllib.parse
+import urllib.request
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -10,9 +13,10 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-from .db import clean_expired, connect, initialize, iso, json_dump, utc_now
+from .analytics import router as analytics_router
+from .db import SCHEMA_VERSION, clean_expired, connect, initialize, iso, json_dump, utc_now
 from .schemas import (
     ArtifactMetadataCreate,
     HealthResponse,
@@ -24,8 +28,9 @@ from .schemas import (
     StreamCaptureAccepted,
     StreamCaptureCreate,
 )
-from .security import require_lab_token
-from .machine_identity import Machine, enroll_machine, project_id_from_url, require_machine_signature
+from .security import require_capture_token, require_operator_token, verify_google_token
+from .machine_identity import (Machine, enroll_machine, project_id_from_url,
+                               require_machine_proof, require_machine_signature)
 from .settings import Settings, get_settings
 
 logger = logging.getLogger("backend")
@@ -33,6 +38,10 @@ logger = logging.getLogger("backend")
 
 def fingerprint(payload: dict) -> str:
     payload = dict(payload)
+    if payload.get("usage_context") == "unknown":
+        payload.pop("usage_context")
+    if payload.get("usage_context_source") == "unknown":
+        payload.pop("usage_context_source")
     if payload.get("attachments_capture_status") == "unavailable":
         payload.pop("attachments_capture_status")
     if payload.get("attachments_truncated") is False:
@@ -78,6 +87,7 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
 )
+app.include_router(analytics_router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -103,19 +113,52 @@ if settings.cors_origins:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", schema_version="0.5")
+    return HealthResponse(status="ok", schema_version=SCHEMA_VERSION)
 
 
-@app.get("/v1/stream-captures/recent", dependencies=[Depends(require_lab_token)])
-def recent_stream_captures(settings: Settings = Depends(get_settings)) -> dict:
+class GoogleCodeExchange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(min_length=1, max_length=4096)
+    code_verifier: str = Field(pattern=r"^[A-Za-z0-9._~-]{43,128}$")
+    nonce: str = Field(min_length=16, max_length=256)
+    redirect_uri: str = Field(min_length=1, max_length=2048)
+
+
+@app.post("/v1/auth/google-code")
+def exchange_google_code(payload: GoogleCodeExchange, settings: Settings = Depends(get_settings)) -> dict:
+    if settings.app_env.lower() != "lab" or payload.redirect_uri != settings.google_extension_redirect_uri:
+        raise HTTPException(status_code=403, detail="Google login is not configured for this redirect")
+    data = urllib.parse.urlencode({
+        "code": payload.code,
+        "code_verifier": payload.code_verifier,
+        "client_id": settings.google_oauth_client_id,
+        "client_secret": settings.google_oauth_client_secret.get_secret_value(),
+        "redirect_uri": settings.google_extension_redirect_uri,
+        "grant_type": "authorization_code",
+    }).encode("ascii")
+    request = urllib.request.Request("https://oauth2.googleapis.com/token", data=data,
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as result:
+            token = json.load(result)["id_token"]
+    except (urllib.error.URLError, ValueError, KeyError) as error:
+        raise HTTPException(status_code=401, detail="Google code exchange failed") from error
+    claims = verify_google_token(token, settings, payload.nonce)
+    return {"id_token": token, "sub": claims["sub"], "email": claims["email"], "exp": claims["exp"]}
+
+
+@app.get("/v1/stream-captures/recent")
+def recent_stream_captures(department_code: str | None = Depends(require_operator_token),
+                           settings: Settings = Depends(get_settings)) -> dict:
     with connect(settings) as db:
         rows = db.execute(
-            """SELECT capture_id, device_installation_id, attributed_person, machine_key_fingerprint,
+            """SELECT capture_id, device_installation_id, attributed_person, employee_id, department_code, machine_key_fingerprint,
                       platform, path, request_id, status_code, content_type, capture_status,
                       response_chars, bytes, chunks, frames, done_markers, protocol_done,
                       reader_done, reader_aborted_after_done, truncated, stream_elapsed_ms,
                       event_types_json, event_shapes_json, event_sequence_json, observed_at, received_at
-               FROM stream_captures ORDER BY received_at DESC LIMIT 20"""
+               FROM stream_captures WHERE (? IS NULL OR department_code = ?)
+               ORDER BY received_at DESC LIMIT 20""", (department_code, department_code)
         ).fetchall()
     items = []
     for row in rows:
@@ -127,14 +170,16 @@ def recent_stream_captures(settings: Settings = Depends(get_settings)) -> dict:
     return {"items": items}
 
 
-@app.get("/v1/artifact-metadata/recent", dependencies=[Depends(require_lab_token)])
-def recent_artifact_metadata(settings: Settings = Depends(get_settings)) -> dict:
+@app.get("/v1/artifact-metadata/recent")
+def recent_artifact_metadata(department_code: str | None = Depends(require_operator_token),
+                             settings: Settings = Depends(get_settings)) -> dict:
     with connect(settings) as db:
         rows = db.execute(
-            """SELECT artifact_id, device_installation_id, attributed_person, machine_key_fingerprint,
+            """SELECT artifact_id, device_installation_id, attributed_person, employee_id, department_code, machine_key_fingerprint,
                       platform, source, file_name, mime_type, size_bytes, conversation_id,
                       conversation_context_source, size_source, observed_at, received_at
-               FROM artifact_metadata ORDER BY received_at DESC LIMIT 20"""
+               FROM artifact_metadata WHERE (? IS NULL OR department_code = ?)
+               ORDER BY received_at DESC LIMIT 20""", (department_code, department_code)
         ).fetchall()
     return {"items": [dict(row) for row in rows]}
 
@@ -144,15 +189,19 @@ class MachineEnrollment(BaseModel):
     public_key: dict
 
 
-@app.post("/v1/machines", dependencies=[Depends(require_lab_token)])
-def register_machine(payload: MachineEnrollment, settings: Settings = Depends(get_settings)) -> dict:
-    return enroll_machine(payload.installation_id, payload.public_key, settings)
+@app.post("/v1/machines")
+def register_machine(payload: MachineEnrollment, google_sub: str | None = Depends(require_capture_token),
+                     settings: Settings = Depends(get_settings)) -> dict:
+    return enroll_machine(payload.installation_id, payload.public_key, settings, google_sub)
 
 
-@app.get("/v1/machines/{installation_id}", dependencies=[Depends(require_lab_token)])
-def get_machine(installation_id: UUID, settings: Settings = Depends(get_settings)) -> dict:
+@app.get("/v1/machines/{installation_id}")
+def get_machine(installation_id: UUID, machine: Machine | None = Depends(require_machine_proof),
+                settings: Settings = Depends(get_settings)) -> dict:
+    if machine is None or machine.installation_id != str(installation_id):
+        raise HTTPException(status_code=403, detail="Installation proof required")
     with connect(settings) as db:
-        row = db.execute("SELECT installation_id, key_fingerprint, person_name, project_id FROM machines WHERE installation_id = ?",
+        row = db.execute("SELECT installation_id, key_fingerprint, person_name, project_id, employee_id, department_code FROM machines WHERE installation_id = ?",
                          (str(installation_id),)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Machine not enrolled")
@@ -203,8 +252,9 @@ def create_interaction(
                 platform, account_label, project_json, conversation_json, prompt_json,
                 attachments_json, adapter_version, status, observed_at, received_at, source_ip,
                 attributed_person, project_id, machine_key_fingerprint,
-                attachments_capture_status, attachments_truncated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                attachments_capture_status, attachments_truncated, employee_id, department_code,
+                usage_context, usage_context_source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 interaction_id,
                 str(payload.client_event_id),
@@ -226,6 +276,10 @@ def create_interaction(
                 machine.fingerprint if machine else None,
                 payload.attachments_capture_status,
                 payload.attachments_truncated,
+                machine.employee_id if machine else None,
+                machine.department_code if machine else None,
+                payload.usage_context,
+                payload.usage_context_source,
             ),
         )
         db.execute(
@@ -257,12 +311,13 @@ def create_response(
     with connect(settings) as db:
         db.execute("BEGIN IMMEDIATE")
         interaction = db.execute(
-            "SELECT interaction_id, device_installation_id, machine_key_fingerprint FROM interactions WHERE interaction_id = ?", (str(interaction_id),)
+            "SELECT interaction_id, device_installation_id, machine_key_fingerprint, department_code FROM interactions WHERE interaction_id = ?", (str(interaction_id),)
         ).fetchone()
         if interaction is None:
             raise HTTPException(status_code=404, detail="interaction not found")
         if machine and (interaction["device_installation_id"] != machine.installation_id or
-                        interaction["machine_key_fingerprint"] != machine.fingerprint):
+                        interaction["machine_key_fingerprint"] != machine.fingerprint or
+                        (settings.app_env.lower() == "lab" and interaction["department_code"] != machine.department_code)):
             raise HTTPException(status_code=404, detail="interaction not found")
         existing = db.execute(
             "SELECT interaction_id, request_fingerprint, capture_status, received_at FROM responses WHERE client_event_id = ?",
@@ -351,8 +406,9 @@ def create_stream_capture(
                 machine_key_fingerprint, platform, path, request_id, status_code, content_type,
                 capture_status, response_chars, bytes, chunks, frames, done_markers,
                 protocol_done, reader_done, reader_aborted_after_done, truncated, stream_elapsed_ms,
-                event_types_json, event_shapes_json, event_sequence_json, observed_at, received_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                event_types_json, event_shapes_json, event_sequence_json, observed_at, received_at,
+                employee_id, department_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 capture_id, request_fingerprint, machine.installation_id, machine.person_name,
                 machine.fingerprint, payload.platform, payload.path, payload.request_id, payload.status_code,
@@ -361,6 +417,7 @@ def create_stream_capture(
                 int(payload.reader_done), int(payload.reader_aborted_after_done), int(payload.truncated),
                 payload.stream_elapsed_ms, json_dump(payload.event_types), json_dump(payload.event_shapes),
                 json_dump(payload.event_sequence), iso(payload.observed_at), iso(received_at),
+                machine.employee_id, machine.department_code,
             ),
         )
     return StreamCaptureAccepted(
@@ -406,14 +463,16 @@ def create_artifact_metadata(
             """INSERT INTO artifact_metadata (
                 artifact_id, request_fingerprint, device_installation_id, attributed_person,
                 machine_key_fingerprint, platform, source, file_name, mime_type, size_bytes,
-                conversation_id, conversation_context_source, size_source, observed_at, received_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                conversation_id, conversation_context_source, size_source, observed_at, received_at,
+                employee_id, department_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (artifact_id, request_fingerprint, machine.installation_id, machine.person_name,
              machine.fingerprint, payload.platform, payload.source, payload.file_name, payload.mime_type,
              payload.size_bytes,
              str(payload.conversation_context.conversation_id) if payload.conversation_context else None,
              payload.conversation_context.source if payload.conversation_context else None,
-             payload.size_source, iso(payload.observed_at), iso(received_at)),
+             payload.size_source, iso(payload.observed_at), iso(received_at),
+             machine.employee_id, machine.department_code),
         )
     return {"artifact_id": artifact_id, "status": "stored", "received_at": iso(received_at),
             "attributed_person": machine.person_name, "duplicate": False}
@@ -422,11 +481,12 @@ def create_artifact_metadata(
 @app.get(
     "/v1/interactions/{interaction_id}",
     response_model=InteractionDetail,
-    dependencies=[Depends(require_lab_token)],
 )
-def get_interaction(interaction_id: UUID, settings: Settings = Depends(get_settings)) -> InteractionDetail:
+def get_interaction(interaction_id: UUID, department_code: str | None = Depends(require_operator_token),
+                    settings: Settings = Depends(get_settings)) -> InteractionDetail:
     with connect(settings) as db:
-        row = db.execute("SELECT * FROM interactions WHERE interaction_id = ?", (str(interaction_id),)).fetchone()
+        row = db.execute("SELECT * FROM interactions WHERE interaction_id = ? AND (? IS NULL OR department_code = ?)",
+                         (str(interaction_id), department_code, department_code)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
         responses = db.execute(
@@ -444,6 +504,10 @@ def get_interaction(interaction_id: UUID, settings: Settings = Depends(get_setti
         platform=row["platform"],
         account_label=row["account_label"],
         attributed_person=row["attributed_person"],
+        employee_id=row["employee_id"],
+        department_code=row["department_code"],
+        usage_context=row["usage_context"],
+        usage_context_source=row["usage_context_source"],
         project_id=row["project_id"],
         machine_key_fingerprint=row["machine_key_fingerprint"],
         project=json.loads(row["project_json"]),

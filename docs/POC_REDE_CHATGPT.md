@@ -56,7 +56,9 @@ Retenção/liberação só será considerada após a POC A demonstrar correlaç�
 
 ## 5. Evidência e aceite
 
-Registrar para cada caso: versão do Chrome, modo Chat/Work, horário, ID local do envio, transporte, caminho redigido, status, tipo de conteúdo, começo/fim observados, eventos relevantes, resposta reconstruída, resposta visível e diferença. Usar somente textos sintéticos. A lista de casos inclui curta, longa, Markdown, tabela, código, interrupção, erro, regeneração, edição, envios consecutivos, conversa nova, troca de conversa e ferramentas quando disponíveis.
+Registrar para cada caso: versão do Chrome, horário, ID local do envio, transporte, caminho redigido, status, tipo de conteúdo, começo/fim observados, eventos relevantes, resposta reconstruída, resposta visível e diferença. Usar somente textos sintéticos. A rodada atual foca o uso contínuo em Work, incluindo respostas curtas e longas, interrupção, erro, regeneração, edição, envios consecutivos, conversas novas e retomadas. A classificação entre Work e Chat fica fora do MVP e será revisitada depois.
+
+Na extensão ativa, a captura completa exige exatamente um `[DONE]`, leitura encerrada ou abortada depois do marcador e ausência de truncamento. Os sinais internos de status e fim de turno ficam no diagnóstico, mas não bloqueiam a classificação como completa. Um ensaio de 10 envios em Work confirmou prompts únicos e atribuídos, mas encontrou resposta falsa-completa: a interface mostrou `ACK-01` a `ACK-10` e o banco guardou apenas `ACK-` em todos. O fluxo observado contém um delta com `v` textual que o parser não anexava. O parser local foi ajustado e os 8 testes focados passaram; a extensão ainda precisa ser recarregada e o caso repetido no navegador antes de declarar fidelidade.
 
 **Próximo gate:** executar a sonda de metadados no ChatGPT Web real. Não declarar mecanismo, sinal de término, POC A validada ou POC B viável antes dessa evidência.
 
@@ -73,3 +75,10 @@ O primeiro fluxo real da 0.3.0 capturou o prompt, mas não gerou resposta persis
 ### Sincronização do bloqueador 0.3.2 (2026-10-07)
 
 No reteste da 0.3.1, a aba mostrou “bloqueio manual ligado” mesmo após o usuário informar que a opção estava desligada. A inspeção identificou que o bridge começava com `manualBlocked=true` e só recebia a configuração após a consulta à atribuição da instalação. Na 0.3.2, o bloqueio segue fechado durante a sincronização, mas a mensagem passa a informar estado não sincronizado; a configuração manual é enviada antes da consulta de atribuição, que depois atualiza o estado. Isso evita atribuir incorretamente o bloqueio ao controle manual. A versão exige reteste em navegador; cópias antigas da extensão ainda precisam ser excluídas/identificadas no Chrome.
+
+
+## Captura de escolhas interativas (extensão 0.4.6)
+
+Quando um POST de conversa chega ao bloqueador sem a permissão de uso único, ele continua cancelado. Se o texto da escolha estiver visível no compositor, a ponte isolada executa a mesma avaliação local e registra no diagnóstico somente a ação e as regras encontradas. BLOCK e REVIEW exibem o motivo correspondente. ALLOW e WARN mantêm o texto no compositor e pedem que a pessoa use Enviar; esse envio normal cria a captura e a permissão de uso único.
+
+Esse fallback não lê o corpo de rede, não persiste prompt bloqueado e não reenvia automaticamente a requisição cancelada. O teste automatizado cobre um marcador sintético de chave privada e um prompt permitido. A validação na interface real ainda depende de recarregar a extensão e confirmar que o compositor mantém o texto após a escolha.

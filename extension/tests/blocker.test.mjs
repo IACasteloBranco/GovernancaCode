@@ -105,6 +105,12 @@ test('bloqueio de eventos cobre Enter, clique e submit e libera após mudança d
   assert.equal(unassigned.prevented, true);
   assert.match(toasts.at(-1).textContent, /atribuída a uma pessoa/i);
   policyListener({type: 'block_policy', blocked: false, machineAssigned: true});
+  listeners.get('message')({source: window, origin: pageLocation.origin,
+    data: {marker: 'governanca-ai-prompt-block-v1', phase: 'pong', blocked: true}});
+  assert.deepEqual({...messages.find(item => item.type === 'blocker_health')}, {
+    type: 'blocker_health', mainActive: true, blocked: false, synchronized: true,
+    machineAssigned: true, authExpired: false, mainBlocked: true
+  });
   assert.equal(attributes.get('data-governanca-block-prompts'), 'block');
   const allowed = event({key: 'Enter', shiftKey: false, isComposing: false, target: field});
   listeners.get('keydown')(allowed);
@@ -177,6 +183,56 @@ test('anexo visível recebe tempo para upload e mantém a barreira de uso único
   assert.ok(expiry >= now + 119000 && expiry <= now + 121000);
   assert.equal(attrs.get('data-governanca-block-prompts'), 'allow');
   assert.equal(captured.capture_status, 'observed');
+});
+
+test('network-blocked attempt rechecks composer text without capturing or allowing', () => {
+  const listeners = new Map();
+  const attributes = new Map();
+  const messages = [];
+  const notices = [];
+  let captureCount = 0;
+  let syncPolicy;
+  const form = {contains: () => true};
+  const field = {innerText: '', contains: () => true, closest: () => form};
+  const root = {setAttribute: (key, value) => attributes.set(key, value),
+    getAttribute: key => attributes.get(key), removeAttribute: key => attributes.delete(key), append: () => {}};
+  const document = {documentElement: root, body: {append: node => notices.push(node)}, addEventListener: () => {},
+    querySelector: selector => selector === '#prompt-textarea' ? field : null,
+    createElement: () => ({setAttribute: () => {}, style: {}, remove: () => {}, textContent: ''})};
+  const window = {addEventListener: (type, callback) => listeners.set(type, callback), postMessage: () => {}};
+  const port = {onMessage: {addListener: callback => {syncPolicy = callback;}},
+    onDisconnect: {addListener: () => {}}, postMessage: () => {}};
+  runInNewContext(`${policySource}\n${messagesSource}\n${bridgeSource}`, {
+    window, document, chrome: {runtime: {connect: () => port, sendMessage: message => {
+      messages.push(message);
+      return Promise.resolve({});
+    }}}, location: {origin: 'https://chatgpt.com', href: 'https://chatgpt.com/c/synthetic'},
+    URL, Date, setTimeout: () => {}, globalThis: {
+      GovernancaFiles: {observe: () => ({capture_status: 'unavailable', items: [], truncated: false})},
+      GovernancaCaptureAttempt: () => {captureCount++;}
+    }
+  });
+  syncPolicy({type: 'block_policy', blocked: false, machineAssigned: true});
+
+  field.innerText = '-----BEGIN PRIVATE KEY-----';
+  listeners.get('message')({source: window, origin: 'https://chatgpt.com', data: {
+    marker: 'governanca-ai-prompt-block-v1', phase: 'network_blocked', reason: 'missing'
+  }});
+  assert.equal(messages.find(message => message.type === 'prompt_decision').method, 'network');
+  assert.equal(messages.find(message => message.type === 'prompt_decision').action, 'BLOCK');
+  assert.equal(messages.find(message => message.type === 'prompt_decision').findings[0].rule, 'R01');
+  assert.match(notices.at(-1).textContent, /chave privada/i);
+  assert.equal(captureCount, 0);
+  assert.equal(attributes.get('data-governanca-block-prompts'), 'block');
+
+  field.innerText = 'Pergunta sintética permitida';
+  listeners.get('message')({source: window, origin: 'https://chatgpt.com', data: {
+    marker: 'governanca-ai-prompt-block-v1', phase: 'network_blocked', reason: 'missing'
+  }});
+  assert.equal(messages.filter(message => message.type === 'prompt_decision').at(-1).action, 'ALLOW');
+  assert.match(notices.at(-1).textContent, /continua no compositor; revise e use Enviar/i);
+  assert.equal(captureCount, 0);
+  assert.equal(attributes.get('data-governanca-block-prompts'), 'block');
 });
 
 test('allows an attachment-only prompt and passes the current composer snapshot', () => {

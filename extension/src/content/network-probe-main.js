@@ -160,6 +160,7 @@
       contentType: mime(response.headers?.get?.('content-type')), bytes, chunks, frames, doneMarkers,
       protocolDone: doneMarkers > 0, truncated,
       streamElapsedMs: elapsed(streamStarted),
+      assistantFinished, assistantEndTurn, assistantActive: currentRole === 'assistant',
       eventTypes: [...types].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, count]) => `${name}=${count}`),
       eventShapes: [...shapes].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, count]) => `${name}=${count}`),
       eventKeys: [...keyShapes].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, count]) => `${name}=${count}`),
@@ -384,6 +385,14 @@
               textChars = joinedText().length;
             } else if (/(?:^|\/)content\/parts(?:\/|$)/.test(parsed.p)) truncated = true;
           }
+          if (isDelta && currentRole === 'assistant' && typeof parsed?.p !== 'string' &&
+              typeof parsed?.v === 'string') {
+            const index = nextTextPartIndex() - 1;
+            if (textChars + parsed.v.length <= 100000) {
+              textParts.set(Math.max(index, 0), (textParts.get(Math.max(index, 0)) || '') + parsed.v);
+              textChars = joinedText().length;
+            } else truncated = true;
+          }
           if (currentRole === 'assistant' && /(?:^|\/)message\/status$/.test(parsed?.p || '') &&
               parsed.v === 'finished_successfully') assistantFinished = true;
           if (currentRole === 'assistant' && /(?:^|\/)message\/end_turn$/.test(parsed?.p || '') &&
@@ -414,8 +423,7 @@
       // response. Completion metadata is useful, but some DPU snapshots
       // encode it as patches that do not contain a full message object.
       const protocolDone = doneMarkers > 0;
-      const complete = protocolDone && doneMarkers === 1 && assistantFinished && assistantEndTurn &&
-        currentRole === 'assistant' &&
+      const complete = protocolDone && doneMarkers === 1 &&
         (readerDone || readerAbortedAfterDone) && !truncated;
       emit(attemptId, 'fetch', 'stream_capture', {...summary(), responseChars,
         captureStatus: complete ? 'complete' : 'incomplete', readerDone, readerAbortedAfterDone,

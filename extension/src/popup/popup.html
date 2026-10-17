@@ -3,16 +3,22 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Captura local</title><link rel="stylesheet" href="popup.css"></head>
 <body>
   <h1>POC de stream</h1>
-  <p>Captura prompts e respostas do ChatGPT, além de metadados técnicos de streams e arquivos, no backend local. Os registros ficam vinculados à instalação atribuída a um colaborador. Anexos enviados têm somente os metadados observados registrados, sem leitura do conteúdo do arquivo.</p>
+  <p>Captura prompts e respostas do ChatGPT, além de metadados técnicos de streams e arquivos. Os registros ficam vinculados à instalação atribuída a um colaborador. Anexos enviados têm somente os metadados observados registrados, sem leitura do conteúdo do arquivo.</p>
+  <div id="cloud-login" hidden>
+    <p id="account">Conta Google não conectada.</p>
+    <p id="account-sub" hidden>Identificador Google (sub): <code id="sub"></code></p>
+    <button id="login" type="button">Entrar com Google Workspace</button>
+    <button id="logout" type="button">Sair</button>
+  </div>
   <h2>Identificação da instalação</h2>
   <pre id="identity">Carregando…</pre>
   <button id="register-machine" type="button">Atualizar identificação</button>
   <form id="config">
-    <label>Token da API principal (backend/.env)<input id="token" type="password" autocomplete="off" minlength="24"></label>
+    <label id="local-token">Token de captura (CAPTURE_API_TOKEN)<input id="token" type="password" autocomplete="off" minlength="24"></label>
     <label class="check"><input id="enabled" type="checkbox"> Ativar captura</label>
     <button>Salvar e ativar</button>
   </form>
-  <button id="health" type="button">Testar API local</button>
+  <button id="health" type="button">Testar API</button>
   <p id="status" role="status"></p>
   <h2>Sonda na aba atual</h2><p id="probe-status">Verificando…</p>
   <h2>Capturas recentes</h2>

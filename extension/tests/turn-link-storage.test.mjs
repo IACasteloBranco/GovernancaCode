@@ -4,7 +4,8 @@ import {test} from 'node:test';
 import {webcrypto} from 'node:crypto';
 import vm from 'node:vm';
 
-const source = await readFile(new URL('../src/background/service-worker.js', import.meta.url), 'utf8');
+const source = (await readFile(new URL('../src/background/service-worker.js', import.meta.url), 'utf8'))
+  .replace("import {CONFIG} from './config.js';", "const CONFIG = {mode: 'local', apiUrl: '', googleClientId: ''};");
 const turnKey = '00000000-0000-4000-8000-000000000020';
 const interactionId = '00000000-0000-4000-8000-000000000099';
 const promptHash = 'a'.repeat(64);
@@ -63,6 +64,9 @@ test('reports a paused capture without storing prompt text', async () => {
 test('reports an invalid prompt payload separately from a paused capture', async () => {
   const {send, local} = worker();
   local.enabled = true;
+  local.captureApiToken = 'synthetic-token-at-least-24-chars';
+  local.machineAssignment = {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
+    department_code: 'TEST', key_matches: true};
   const result = await send({type: 'capture_prompt', payload: {prompt: {text: 'SYNTHETIC-PRIVATE-MARKER'}}});
 
   assert.equal(result.ok, false);
@@ -82,12 +86,51 @@ test('does not record prompt diagnostics for messages outside the ChatGPT tab', 
 test('keeps actionable diagnostics when blocker health updates repeat', async () => {
   const {send, local} = worker();
   local.enabled = true;
+  local.captureApiToken = 'synthetic-token-at-least-24-chars';
+  local.machineAssignment = {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
+    department_code: 'TEST', key_matches: true};
   await send({type: 'capture_prompt', payload: {prompt: {text: 'SYNTHETIC-MARKER'}}});
   for (let index = 0; index < 40; index++)
     await send({type: 'blocker_health', mainActive: true, blocked: false,
-      synchronized: true, mainBlocked: true});
+      synchronized: true, machineAssigned: false, authExpired: true, mainBlocked: true});
 
   assert.equal(local.captureDiagnostics.some(item => item.stage === 'prompt_rejected' &&
     item.error_code === 'invalid_prompt'), true);
   assert.equal(local.captureDiagnostics.filter(item => item.stage === 'blocker_health').length, 1);
+  const {at, ...health} = local.captureDiagnostics.find(item => item.stage === 'blocker_health');
+  assert.deepEqual(health, {stage: 'blocker_health', main_active: true,
+    policy_synchronized: true, page_capture_allowed: false, auth_expired: true,
+    network_gate_blocked: true, cloud_configured: true, capture_enabled: true, auth_session_valid: true,
+    machine_assignment_complete: true, key_matches: true, subject_bound: true,
+    capture_allowed: true});
+});
+
+test('reports each capture readiness requirement without exposing credentials', async () => {
+  const {send, local} = worker();
+  local.enabled = true;
+  local.captureApiToken = 'synthetic-token-at-least-24-chars';
+  local.machineAssignment = {person_name: 'Pessoa SintÃ©tica', employee_id: 'SYN-1',
+    department_code: 'TEST', key_matches: true};
+
+  await send({type: 'blocker_health', mainActive: true, blocked: false,
+    synchronized: true, machineAssigned: true, authExpired: false, mainBlocked: true});
+
+  const diagnostic = local.captureDiagnostics.find(item => item.stage === 'blocker_health');
+  assert.equal(diagnostic.capture_enabled, true);
+  assert.equal(diagnostic.auth_session_valid, true);
+  assert.equal(diagnostic.machine_assignment_complete, true);
+  assert.equal(diagnostic.key_matches, true);
+  assert.equal(diagnostic.subject_bound, true);
+  assert.equal(diagnostic.capture_allowed, true);
+  assert.equal(JSON.stringify(diagnostic).includes('synthetic-token'), false);
+
+  local.enabled = false;
+  await send({type: 'prompt_decision', version: '0.1.2', destination: 'not_approved',
+    method: 'click', action: 'BLOCK', primaryRule: 'MACHINE',
+    findings: [{rule: 'MACHINE', action: 'BLOCK', count: 1}]});
+  const decision = local.captureDiagnostics.find(item => item.stage === 'policy_decision');
+  assert.equal(decision.capture_enabled, false);
+  assert.equal(decision.auth_session_valid, true);
+  assert.equal(decision.machine_assignment_complete, true);
+  assert.equal(decision.capture_allowed, false);
 });

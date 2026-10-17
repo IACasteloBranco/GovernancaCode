@@ -1,0 +1,2 @@
+employee_id,person_name,department_code,department_name,active
+COLAB-001,Pessoa Sintética,DEP-001,Departamento Sintético,true
