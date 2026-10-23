@@ -7,22 +7,38 @@ const mainSource = await readFile(new URL('../src/content/blocker-main.js', impo
 const bridgeSource = await readFile(new URL('../src/content/blocker-bridge.js', import.meta.url), 'utf8');
 const policySource = await readFile(new URL('../src/content/policy-engine.js', import.meta.url), 'utf8');
 const messagesSource = await readFile(new URL('../src/content/policy-messages.js', import.meta.url), 'utf8');
+const protocolVersion = 1;
+function bridgeWindow(listeners, origin, attributes) {
+  const window = {addEventListener: (type, listener) => listeners.set(type, listener), postMessage: message => {
+    if (message.phase === 'ping') listeners.get('message')?.({source: window, origin,
+      data: {marker: 'governanca-ai-prompt-block-v1', phase: 'pong', protocolVersion,
+        blocked: attributes.get('data-governanca-block-prompts') !== 'allow'}});
+  }};
+  return window;
+}
 
 for (const [origin, endpoint] of [['https://chatgpt.com', '/backend-api/abc/conversation'],
   ['https://claude.ai', '/api/organizations/org/chat_conversations/chat/completion']]) {
 test(`${origin}: bloqueio de rede exige permissão de uso único`, async () => {
   const calls = [];
   const messages = [];
+  const listeners = new Map();
   const attrs = new Map([['data-governanca-block-prompts', 'block']]);
   const root = {getAttribute: key => attrs.get(key), setAttribute: (key, value) => attrs.set(key, value),
     removeAttribute: key => attrs.delete(key)};
   const window = {
     fetch: (...args) => { calls.push(args); return Promise.resolve({ok: true}); },
-    postMessage: message => messages.push(message), addEventListener: () => {}
+    postMessage: message => {
+      messages.push(message);
+      if (message.phase === 'backend_preflight') listeners.get('message')?.({source: window,
+        origin, data: {marker: 'governanca-ai-prompt-block-v1', phase: 'backend_preflight_result',
+          requestId: message.requestId, protocolVersion, available: true}});
+    },
+    addEventListener: (type, listener) => listeners.set(type, listener)
   };
   runInNewContext(mainSource, {window, document: {documentElement: root},
-    location: {href: origin + '/', origin},
-    URL, Symbol, Proxy, Reflect, Promise, DOMException});
+    location: {href: origin + '/', origin}, crypto: {randomUUID: () => '00000000-0000-4000-8000-000000000001'},
+    URL, Symbol, Proxy, Reflect, Promise, DOMException, setTimeout, clearTimeout});
   await assert.rejects(window.fetch(endpoint, {method: 'POST'}), {name: 'AbortError'});
   assert.equal(calls.length, 0);
   assert.equal(messages[0].phase, 'network_blocked');
@@ -38,6 +54,65 @@ test(`${origin}: bloqueio de rede exige permissão de uso único`, async () => {
   assert.equal(calls.length, 3);
 });
 }
+
+test('backend indisponível retém o POST da conversa', async () => {
+  const calls = [];
+  const messages = [];
+  const listeners = new Map();
+  const origin = 'https://chatgpt.com';
+  const attrs = new Map([['data-governanca-block-prompts', 'allow'],
+    ['data-governanca-allow-until', String(Date.now() + 15000)]]);
+  const root = {getAttribute: key => attrs.get(key), setAttribute: (key, value) => attrs.set(key, value),
+    removeAttribute: key => attrs.delete(key)};
+  const window = {
+    fetch: (...args) => { calls.push(args); return Promise.resolve({ok: true}); },
+    postMessage: message => {
+      messages.push(message);
+      if (message.phase === 'backend_preflight') listeners.get('message')?.({source: window,
+        origin, data: {marker: 'governanca-ai-prompt-block-v1', phase: 'backend_preflight_result',
+          requestId: message.requestId, protocolVersion, available: false, reason: 'backend_unavailable'}});
+    },
+    addEventListener: (type, listener) => listeners.set(type, listener)
+  };
+  runInNewContext(mainSource, {window, document: {documentElement: root},
+    location: {href: origin + '/', origin}, crypto: {randomUUID: () => '00000000-0000-4000-8000-000000000002'},
+    URL, Symbol, Proxy, Reflect, Promise, DOMException, setTimeout, clearTimeout});
+
+  await assert.rejects(window.fetch('/backend-api/conversation', {method: 'POST'}), {name: 'AbortError'});
+  assert.equal(calls.length, 0);
+  assert.equal(attrs.get('data-governanca-block-prompts'), 'block');
+  assert.equal(messages.some(message => message.phase === 'network_blocked' &&
+    message.reason === 'backend_unavailable'), true);
+});
+
+test('versão incompatível do bridge retém o POST e informa o motivo', async () => {
+  const calls = [];
+  const messages = [];
+  const listeners = new Map();
+  const origin = 'https://chatgpt.com';
+  const attrs = new Map([['data-governanca-block-prompts', 'allow'],
+    ['data-governanca-allow-until', String(Date.now() + 15000)]]);
+  const root = {getAttribute: key => attrs.get(key), setAttribute: (key, value) => attrs.set(key, value),
+    removeAttribute: key => attrs.delete(key)};
+  const window = {
+    fetch: (...args) => { calls.push(args); return Promise.resolve({ok: true}); },
+    postMessage: message => {
+      messages.push(message);
+      if (message.phase === 'backend_preflight') listeners.get('message')?.({source: window,
+        origin, data: {marker: 'governanca-ai-prompt-block-v1', phase: 'backend_preflight_result',
+          requestId: message.requestId, available: true}});
+    },
+    addEventListener: (type, listener) => listeners.set(type, listener)
+  };
+  runInNewContext(mainSource, {window, document: {documentElement: root},
+    location: {href: origin + '/', origin}, crypto: {randomUUID: () => '00000000-0000-4000-8000-000000000003'},
+    URL, Symbol, Proxy, Reflect, Promise, DOMException, setTimeout, clearTimeout});
+
+  await assert.rejects(window.fetch('/backend-api/conversation', {method: 'POST'}), {name: 'AbortError'});
+  assert.equal(calls.length, 0);
+  assert.equal(messages.some(message => message.phase === 'network_blocked' &&
+    message.reason === 'extension_mismatch'), true);
+});
 
 test('bloqueio de eventos cobre Enter, clique e submit e libera após mudança de regra', () => {
   let captures = 0;
@@ -61,7 +136,7 @@ test('bloqueio de eventos cobre Enter, clique e submit e libera após mudança d
       return toast;
     }
   };
-  const window = {addEventListener: (type, listener) => listeners.set(type, listener), postMessage: () => {}};
+  const window = bridgeWindow(listeners, 'https://chatgpt.com', attributes);
   const port = {onMessage: {addListener: listener => { policyListener = listener; }},
     onDisconnect: {addListener: listener => { disconnectListener = listener; }}, postMessage: () => {}};
   const chrome = {runtime: {connect: () => port,
@@ -100,16 +175,18 @@ test('bloqueio de eventos cobre Enter, clique e submit e libera após mudança d
   assert.equal(submit.prevented, true);
 
   policyListener({type: 'block_policy', blocked: false, machineAssigned: false});
+  assert.match(toasts.at(-1).textContent, /versão da extensão/i);
   const unassigned = event({key: 'Enter', shiftKey: false, isComposing: false, target: field});
   listeners.get('keydown')(unassigned);
   assert.equal(unassigned.prevented, true);
-  assert.match(toasts.at(-1).textContent, /atribuída a uma pessoa/i);
-  policyListener({type: 'block_policy', blocked: false, machineAssigned: true});
+  assert.match(toasts.at(-1).textContent, /sincronizando/i);
+  policyListener({type: 'block_policy', blocked: false, machineAssigned: true,
+    protocolVersion, protocolCompatible: true});
   listeners.get('message')({source: window, origin: pageLocation.origin,
-    data: {marker: 'governanca-ai-prompt-block-v1', phase: 'pong', blocked: true}});
-  assert.deepEqual({...messages.find(item => item.type === 'blocker_health')}, {
+    data: {marker: 'governanca-ai-prompt-block-v1', phase: 'pong', protocolVersion, blocked: true}});
+  assert.deepEqual({...messages.filter(item => item.type === 'blocker_health').at(-1)}, {
     type: 'blocker_health', mainActive: true, blocked: false, synchronized: true,
-    machineAssigned: true, authExpired: false, mainBlocked: true
+    machineAssigned: true, authExpired: false, mainBlocked: true, protocolCompatible: true
   });
   assert.equal(attributes.get('data-governanca-block-prompts'), 'block');
   const allowed = event({key: 'Enter', shiftKey: false, isComposing: false, target: field});
@@ -125,7 +202,8 @@ test('bloqueio de eventos cobre Enter, clique e submit e libera após mudança d
   assert.equal(disconnected.prevented, true);
   assert.match(toasts.at(-1).textContent, /sincronizando/i);
   assert.equal(messages.at(-1).findings.some(item => item.rule === 'MANUAL'), false);
-  policyListener({type: 'block_policy', blocked: false, machineAssigned: true});
+  policyListener({type: 'block_policy', blocked: false, machineAssigned: true,
+    protocolVersion, protocolCompatible: true});
   field.innerText = 'Outra pergunta permitida';
   const labeledButton = {matches: () => false, type: 'button', getAttribute: name => name === 'aria-label' ? 'Enviar' : null};
   const labeledClick = event({target: {closest: () => labeledButton}});
@@ -164,7 +242,7 @@ test('anexo visível recebe tempo para upload e mantém a barreira de uso único
   const editor = {innerText: 'Analise a imagem fictícia', contains: () => true, closest: () => form};
   const document = {documentElement: root, addEventListener: () => {},
     querySelector: selector => selector === '#prompt-textarea' ? editor : null};
-  const window = {addEventListener: (type, callback) => listeners.set(type, callback), postMessage: () => {}};
+  const window = bridgeWindow(listeners, 'https://claude.ai', attrs);
   let policy;
   const port = {onMessage: {addListener: callback => { policy = callback; }},
     onDisconnect: {addListener: () => {}}, postMessage: () => {}};
@@ -177,7 +255,7 @@ test('anexo visível recebe tempo para upload e mantém a barreira de uso único
         GovernancaFiles: {observe: () => ({capture_status: 'observed', items: [{capture_status: 'presence_only'}]})},
         GovernancaCaptureAttempt: value => { captured = value; }
       }});
-  policy({type: 'block_policy', blocked: false, machineAssigned: true});
+  policy({type: 'block_policy', blocked: false, machineAssigned: true, protocolVersion, protocolCompatible: true});
   listeners.get('keydown')({key: 'Enter', shiftKey: false, isComposing: false, target: editor});
   const expiry = Number(attrs.get('data-governanca-allow-until'));
   assert.ok(expiry >= now + 119000 && expiry <= now + 121000);
@@ -199,7 +277,7 @@ test('network-blocked attempt rechecks composer text without capturing or allowi
   const document = {documentElement: root, body: {append: node => notices.push(node)}, addEventListener: () => {},
     querySelector: selector => selector === '#prompt-textarea' ? field : null,
     createElement: () => ({setAttribute: () => {}, style: {}, remove: () => {}, textContent: ''})};
-  const window = {addEventListener: (type, callback) => listeners.set(type, callback), postMessage: () => {}};
+  const window = bridgeWindow(listeners, 'https://chatgpt.com', attributes);
   const port = {onMessage: {addListener: callback => {syncPolicy = callback;}},
     onDisconnect: {addListener: () => {}}, postMessage: () => {}};
   runInNewContext(`${policySource}\n${messagesSource}\n${bridgeSource}`, {
@@ -212,7 +290,7 @@ test('network-blocked attempt rechecks composer text without capturing or allowi
       GovernancaCaptureAttempt: () => {captureCount++;}
     }
   });
-  syncPolicy({type: 'block_policy', blocked: false, machineAssigned: true});
+  syncPolicy({type: 'block_policy', blocked: false, machineAssigned: true, protocolVersion, protocolCompatible: true});
 
   field.innerText = '-----BEGIN PRIVATE KEY-----';
   listeners.get('message')({source: window, origin: 'https://chatgpt.com', data: {
@@ -244,7 +322,7 @@ test('allows an attachment-only prompt and passes the current composer snapshot'
   const editor = {innerText: '', contains: () => true, closest: () => form};
   const document = {documentElement: root, addEventListener: () => {},
     querySelector: selector => selector === '#prompt-textarea' ? editor : null};
-  const window = {addEventListener: (type, callback) => listeners.set(type, callback), postMessage: () => {}};
+  const window = bridgeWindow(listeners, 'https://chatgpt.com', attrs);
   let policy;
   const port = {onMessage: {addListener: callback => { policy = callback; }},
     onDisconnect: {addListener: () => {}}, postMessage: () => {}};
@@ -258,7 +336,7 @@ test('allows an attachment-only prompt and passes the current composer snapshot'
         assert.equal(composer, form);
         return observation;
       }}, GovernancaCaptureAttempt: value => { captured = value; }}});
-  policy({type: 'block_policy', blocked: false, machineAssigned: true});
+  policy({type: 'block_policy', blocked: false, machineAssigned: true, protocolVersion, protocolCompatible: true});
   const submit = {target: editor, key: 'Enter', shiftKey: false, isComposing: false,
     preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; }};
 

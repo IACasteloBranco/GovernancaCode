@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
@@ -14,7 +15,7 @@ from google.auth.exceptions import TransportError
 from app import security
 from app.db import connect, iso, utc_now
 from app.main import app
-from app.settings import get_settings
+from app.settings import Settings, get_settings
 from test_machine_identity import key_material, prompt_payload
 
 
@@ -43,6 +44,7 @@ def lab_client(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "synthetic-client.apps.googleusercontent.com")
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "synthetic-secret")
     monkeypatch.setenv("GOOGLE_EXTENSION_REDIRECT_URI", "https://synthetic.chromiumapp.org/callback")
+    monkeypatch.setenv("GOOGLE_ANALYTICS_REDIRECT_URI", "https://analytics.example.invalid/v1/auth/dashboard/callback")
     monkeypatch.setenv("GOOGLE_OPERATOR_SUB", "operator-sub")
     monkeypatch.setenv("PILOT_DEPARTMENT_CODE", "pilot-dept")
     monkeypatch.setenv("GOOGLE_WORKSPACE_DOMAIN", "example.invalid")
@@ -57,7 +59,7 @@ def lab_client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(security.id_token, "verify_oauth2_token", verify)
     get_settings.cache_clear()
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         yield client
     get_settings.cache_clear()
 
@@ -95,6 +97,125 @@ def test_google_key_unavailable_fails_closed(lab_client, monkeypatch):
     response = lab_client.get("/v1/artifact-metadata/recent", headers=bearer("operator-sub"))
     assert response.status_code == 503
     assert "synthetic key service unavailable" not in response.text
+
+
+def test_dashboard_oauth_uses_pkce_and_issues_http_only_operator_session(lab_client, monkeypatch):
+    start = lab_client.get("/v1/auth/dashboard/start", follow_redirects=False)
+    assert start.status_code == 302
+    authorization = urlparse(start.headers["location"])
+    query = parse_qs(authorization.query)
+    assert authorization.netloc == "accounts.google.com"
+    assert query["redirect_uri"] == ["https://analytics.example.invalid/v1/auth/dashboard/callback"]
+    assert query["code_challenge_method"] == ["S256"]
+    state = query["state"][0]
+    cookies = {cookie.split("=", 1)[0]: cookie for cookie in start.headers.get_list("set-cookie")}
+    assert all("httponly" in value.lower() and "secure" in value.lower() for value in cookies.values())
+
+    exchanged = []
+
+    def exchange(request, timeout):
+        exchanged.append(request.data)
+        return io.BytesIO(b'{"id_token":"synthetic.jwt.token"}')
+
+    def verify_id_token(token, request, audience):
+        assert token == "synthetic.jwt.token"
+        assert audience == "synthetic-client.apps.googleusercontent.com"
+        return {"sub": "operator-sub", "email": "operator@example.invalid", "exp": 2000000000,
+                "hd": "example.invalid", "email_verified": True, "nonce": query["nonce"][0]}
+
+    monkeypatch.setattr("app.main.urllib.request.urlopen", exchange)
+    monkeypatch.setattr(security.id_token, "verify_oauth2_token", verify_id_token)
+    callback = lab_client.get(f"/v1/auth/dashboard/callback?code=synthetic-code&state={state}",
+                              follow_redirects=False)
+    assert callback.status_code == 303
+    assert callback.headers["location"] == "/analytics/"
+    assert b"code_verifier=" in exchanged[0]
+    assert callback.headers.get("cache-control") == "no-store"
+    session_cookie = next(value for value in callback.headers.get_list("set-cookie")
+                          if value.startswith("analytics_session="))
+    assert "httponly" in session_cookie.lower() and "secure" in session_cookie.lower()
+    assert "samesite=lax" in session_cookie.lower()
+    assert "path=/v1" in session_cookie.lower()
+    assert "id_token" not in callback.text
+    session = lab_client.get("/v1/auth/dashboard/session")
+    assert session.status_code == 200
+    assert session.json() == {"authenticated": True, "email": "operator@example.invalid", "expires_at": 2000000000}
+    assert "synthetic.jwt.token" not in session.text
+    summary = lab_client.get("/v1/admin/analytics/summary")
+    assert summary.status_code == 200
+    assert summary.json()["department_scope"] == "pilot-dept"
+    assert summary.headers["cache-control"] == "no-store"
+    assert lab_client.get(f"/v1/interactions/{uuid4()}").status_code == 401
+    assert lab_client.post("/v1/auth/dashboard/logout").status_code == 204
+    assert lab_client.get("/v1/auth/dashboard/session").status_code == 401
+
+
+def test_dashboard_oauth_rejects_bad_state_and_non_operator(lab_client, monkeypatch):
+    start = lab_client.get("/v1/auth/dashboard/start", follow_redirects=False)
+    assert lab_client.get("/v1/auth/dashboard/callback?code=synthetic-code&state=wrong-state",
+                          follow_redirects=False).status_code == 400
+
+    query = parse_qs(urlparse(start.headers["location"]).query)
+
+    def exchange(request, timeout):
+        return io.BytesIO(b'{"id_token":"other-sub"}')
+
+    def verify_id_token(token, request, audience):
+        return {"sub": "other-sub", "email": "other@example.invalid", "exp": 2000000000,
+                "hd": "example.invalid", "email_verified": True, "nonce": query["nonce"][0]}
+
+    monkeypatch.setattr("app.main.urllib.request.urlopen", exchange)
+    monkeypatch.setattr(security.id_token, "verify_oauth2_token", verify_id_token)
+    response = lab_client.get(
+        f"/v1/auth/dashboard/callback?code=synthetic-code&state={query['state'][0]}", follow_redirects=False)
+    assert response.status_code == 403
+    assert "analytics_session" not in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.parametrize("claim_overrides", [
+    {"hd": "untrusted.invalid"},
+    {"nonce": "wrong-nonce"},
+])
+def test_dashboard_oauth_rejects_invalid_workspace_claims(lab_client, monkeypatch, claim_overrides):
+    start = lab_client.get("/v1/auth/dashboard/start", follow_redirects=False)
+    query = parse_qs(urlparse(start.headers["location"]).query)
+
+    def exchange(request, timeout):
+        return io.BytesIO(b'{"id_token":"synthetic.jwt.token"}')
+
+    def verify_id_token(token, request, audience):
+        claims = {"sub": "operator-sub", "email": "operator@example.invalid", "exp": 2000000000,
+                  "hd": "example.invalid", "email_verified": True, "nonce": query["nonce"][0]}
+        claims.update(claim_overrides)
+        return claims
+
+    monkeypatch.setattr("app.main.urllib.request.urlopen", exchange)
+    monkeypatch.setattr(security.id_token, "verify_oauth2_token", verify_id_token)
+    response = lab_client.get(
+        f"/v1/auth/dashboard/callback?code=synthetic-code&state={query['state'][0]}", follow_redirects=False)
+    assert response.status_code == 401
+    assert "analytics_session" not in response.headers.get("set-cookie", "")
+
+
+def test_dashboard_session_rejects_expired_token(lab_client):
+    lab_client.cookies.set("analytics_session", "expired", path="/v1")
+    assert lab_client.get("/v1/auth/dashboard/session").status_code == 401
+
+
+@pytest.mark.parametrize("redirect_uri", [
+    "http://analytics.example.invalid/v1/auth/dashboard/callback",
+    "https://analytics.example.invalid:invalid/v1/auth/dashboard/callback",
+    "https://analytics.example.invalid:0/v1/auth/dashboard/callback",
+    "https://user:password@analytics.example.invalid/v1/auth/dashboard/callback",
+    "https://analytics.example.invalid/v1/auth/dashboard/callback#fragment",
+])
+def test_lab_rejects_invalid_dashboard_redirect_uri(redirect_uri):
+    settings = Settings(app_env="lab", google_oauth_client_id="synthetic-client.apps.googleusercontent.com",
+                        google_oauth_client_secret="synthetic-secret",
+                        google_extension_redirect_uri="https://synthetic.chromiumapp.org/callback",
+                        google_analytics_redirect_uri=redirect_uri, google_workspace_domain="example.invalid")
+    with pytest.raises(ValueError, match="Dashboard OAuth redirect URI"):
+        settings.validate_lab_configuration()
 
 
 def test_lab_capture_requires_matching_google_account_and_operator_scope(lab_client):
@@ -135,6 +256,27 @@ def test_lab_capture_requires_matching_google_account_and_operator_scope(lab_cli
     assert signed(lab_client, "GET", path, machine_id, private, "capture-sub").status_code == 403
     assert signed(lab_client, "POST", "/v1/interactions", machine_id, private, "capture-sub",
                   prompt_payload(machine_id)).status_code == 403
+
+
+def test_lab_allows_rostered_departments_when_pilot_scope_is_wildcard(lab_client, monkeypatch):
+    monkeypatch.setenv("PILOT_DEPARTMENT_CODE", "*")
+    get_settings.cache_clear()
+    machine_id = uuid4()
+    private, public = key_material()
+    enrolled = lab_client.post("/v1/machines", json={"installation_id": str(machine_id), "public_key": public},
+                               headers=bearer("capture-sub"))
+    assert enrolled.status_code == 200
+    with connect(get_settings()) as db:
+        db.execute("UPDATE machines SET person_name = ?, employee_id = ?, department_code = ?, assigned_at = ? WHERE installation_id = ?",
+                   ("SYNTHETIC PERSON", "synthetic-employee", "another-dept", iso(utc_now()), str(machine_id)))
+
+    created = signed(lab_client, "POST", "/v1/interactions", machine_id, private, "capture-sub",
+                     prompt_payload(machine_id))
+    assert created.status_code == 201, created.text
+    summary = lab_client.get("/v1/admin/analytics/summary", headers=bearer("operator-sub"))
+    assert summary.status_code == 200
+    assert summary.json()["department_scope"] is None
+    assert summary.json()["by_department"][0]["department_code"] == "another-dept"
 
 
 def test_operator_recent_lists_exclude_other_departments(lab_client):

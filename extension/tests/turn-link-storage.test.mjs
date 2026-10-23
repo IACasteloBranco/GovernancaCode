@@ -100,7 +100,8 @@ test('keeps actionable diagnostics when blocker health updates repeat', async ()
   const {at, ...health} = local.captureDiagnostics.find(item => item.stage === 'blocker_health');
   assert.deepEqual(health, {stage: 'blocker_health', main_active: true,
     policy_synchronized: true, page_capture_allowed: false, auth_expired: true,
-    network_gate_blocked: true, cloud_configured: true, capture_enabled: true, auth_session_valid: true,
+    protocol_compatible: false, network_gate_blocked: true,
+    cloud_configured: true, capture_enabled: true, auth_session_valid: true,
     machine_assignment_complete: true, key_matches: true, subject_bound: true,
     capture_allowed: true});
 });

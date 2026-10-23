@@ -14,6 +14,7 @@ function worker({badState = false} = {}) {
   const session = {};
   const requests = [];
   let onMessage;
+  let onConnect;
   let rejectApi = false;
   let invalidState = badState;
   const storage = values => ({
@@ -37,7 +38,7 @@ function worker({badState = false} = {}) {
     tabs: {query: async () => []},
     runtime: {getURL: path => `chrome-extension://test/${path}`,
       onMessage: {addListener: listener => {onMessage = listener;}},
-      onConnect: {addListener: () => {}}}
+      onConnect: {addListener: listener => {onConnect = listener;}}}
   };
   const fetch = async (url, options) => {
     requests.push({url, options});
@@ -45,6 +46,7 @@ function worker({badState = false} = {}) {
     if (url.endsWith('/v1/auth/google-code'))
       return {ok: true, json: async () => ({id_token: 'header.payload.signature',
         sub: 'synthetic-google-sub-123', email: 'user@example.test', exp: expiry()})};
+    if (url.endsWith('/health')) return {ok: true, json: async () => ({status: 'ok', schema_version: '0.8'})};
     if (url.endsWith('/v1/machines')) return {ok: true, json: async () => ({installation_id: local.installationId})};
     if (url.includes('/v1/machines/')) {
       if (!local.machinePublicKey) return {ok: true, json: async () => ({installation_id: local.installationId,
@@ -62,7 +64,18 @@ function worker({badState = false} = {}) {
   const popup = {url: chrome.runtime.getURL('src/popup/popup.html')};
   const page = {tab: {id: 1}, frameId: 0, url: 'https://chatgpt.com/'};
   const send = (type, extra = {}, sender = popup) => new Promise(resolve => onMessage({type, ...extra}, sender, resolve));
-  return {send, page, local, session, requests, reject: () => {rejectApi = true;},
+  const connect = async protocolVersion => {
+    const sent = [];
+    let onPortMessage;
+    const port = {name: 'prompt-block-policy', sender: page,
+      postMessage: message => sent.push(message),
+      onDisconnect: {addListener: () => {}},
+      onMessage: {addListener: listener => {onPortMessage = listener;}}};
+    onConnect(port);
+    await onPortMessage({type: 'block_status', ...(protocolVersion === undefined ? {} : {protocolVersion})});
+    return sent;
+  };
+  return {send, connect, page, local, session, requests, reject: () => {rejectApi = true;},
     breakState: () => {invalidState = true;}};
 }
 
@@ -101,6 +114,38 @@ test('a matching assigned machine remains authorized after loading its cloud ass
 
   assert.equal(client.session.machineAssignment.key_matches, true);
   assert.equal((await client.send('probe_config', {}, client.page)).data.enabled, true);
+});
+
+test('backend preflight requires the current blocker protocol before checking readiness', async () => {
+  const client = worker();
+  const stale = await client.send('backend_preflight', {protocolVersion: 0}, client.page);
+  assert.deepEqual({...stale.data}, {protocolVersion: 1, available: false, reason: 'extension_mismatch'});
+  const unavailable = await client.send('backend_preflight', {protocolVersion: 1}, client.page);
+  assert.deepEqual({...unavailable.data}, {protocolVersion: 1, available: false, reason: 'capture_unavailable'});
+  assert.equal(client.requests.some(request => request.url?.endsWith('/health')), false);
+
+  await client.send('login');
+  client.local.enabled = true;
+  client.session.machineAssignment = {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
+    department_code: 'TEST', key_matches: true, subject_bound: true};
+  const ready = await client.send('backend_preflight', {protocolVersion: 1}, client.page);
+  assert.deepEqual({...ready.data}, {protocolVersion: 1, available: true, reason: null});
+  assert.equal(client.requests.some(request => request.url?.endsWith('/health')), true);
+});
+
+test('legacy policy clients never receive a positive machine assignment', async () => {
+  const client = worker();
+  await client.send('login');
+  await client.send('machine_register');
+  client.local.enabled = true;
+
+  const legacy = await client.connect();
+  assert.equal(legacy.at(-1).protocolCompatible, false);
+  assert.equal(legacy.at(-1).machineAssigned, false);
+
+  const current = await client.connect(1);
+  assert.equal(current.at(-1).protocolCompatible, true);
+  assert.equal(current.at(-1).machineAssigned, true);
 });
 
 test('wrong OAuth state prevents code exchange and leaves capture closed', async () => {

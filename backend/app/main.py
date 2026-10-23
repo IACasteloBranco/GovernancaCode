@@ -1,22 +1,25 @@
 import asyncio
+import base64
 import hashlib
 import json
 import logging
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .analytics import router as analytics_router
-from .db import SCHEMA_VERSION, clean_expired, connect, initialize, iso, json_dump, utc_now
+from .db import SCHEMA_VERSION, begin_write, clean_expired, connect, initialize, iso, json_dump, record_privacy_audit, utc_now
 from .schemas import (
     ArtifactMetadataCreate,
     HealthResponse,
@@ -28,12 +31,20 @@ from .schemas import (
     StreamCaptureAccepted,
     StreamCaptureCreate,
 )
-from .security import require_capture_token, require_operator_token, verify_google_token
+from .security import (dashboard_operator_department, require_analytics_operator, require_capture_token, require_dashboard_session,
+                       require_content_viewer, require_operator_token, verify_google_token)
 from .machine_identity import (Machine, enroll_machine, project_id_from_url,
                                require_machine_proof, require_machine_signature)
 from .settings import Settings, get_settings
 
 logger = logging.getLogger("backend")
+ANALYTICS_DIR = Path(__file__).resolve().parents[2] / "analytics"
+if not ANALYTICS_DIR.is_dir():
+    ANALYTICS_DIR = Path(__file__).resolve().parents[1] / "analytics"
+
+
+def _dashboard_cookie_secure(request: Request, settings: Settings) -> bool:
+    return settings.app_env.lower() == "lab" or request.url.scheme == "https"
 
 
 def fingerprint(payload: dict) -> str:
@@ -109,8 +120,6 @@ if settings.cors_origins:
         allow_headers=["Authorization", "Content-Type", "X-Machine-Id", "X-Machine-Timestamp",
                        "X-Machine-Nonce", "X-Machine-Signature"],
     )
-
-
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", schema_version=SCHEMA_VERSION)
@@ -124,27 +133,119 @@ class GoogleCodeExchange(BaseModel):
     redirect_uri: str = Field(min_length=1, max_length=2048)
 
 
-@app.post("/v1/auth/google-code")
-def exchange_google_code(payload: GoogleCodeExchange, settings: Settings = Depends(get_settings)) -> dict:
-    if settings.app_env.lower() != "lab" or payload.redirect_uri != settings.google_extension_redirect_uri:
-        raise HTTPException(status_code=403, detail="Google login is not configured for this redirect")
+_DASHBOARD_OAUTH_COOKIE_PATH = "/v1/auth/dashboard"
+_DASHBOARD_OAUTH_COOKIES = ("analytics_oauth_state", "analytics_oauth_nonce", "analytics_oauth_verifier")
+
+
+def _exchange_google_code(code: str, code_verifier: str, redirect_uri: str, settings: Settings) -> str:
     data = urllib.parse.urlencode({
-        "code": payload.code,
-        "code_verifier": payload.code_verifier,
+        "code": code,
+        "code_verifier": code_verifier,
         "client_id": settings.google_oauth_client_id,
         "client_secret": settings.google_oauth_client_secret.get_secret_value(),
-        "redirect_uri": settings.google_extension_redirect_uri,
+        "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
     }).encode("ascii")
     request = urllib.request.Request("https://oauth2.googleapis.com/token", data=data,
                                      headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
         with urllib.request.urlopen(request, timeout=10) as result:
-            token = json.load(result)["id_token"]
-    except (urllib.error.URLError, ValueError, KeyError) as error:
+            token = json.load(result).get("id_token")
+    except (urllib.error.URLError, ValueError, KeyError, AttributeError) as error:
         raise HTTPException(status_code=401, detail="Google code exchange failed") from error
+    if not isinstance(token, str) or not token:
+        raise HTTPException(status_code=401, detail="Google code exchange failed")
+    return token
+
+
+@app.post("/v1/auth/google-code")
+def exchange_google_code(payload: GoogleCodeExchange, settings: Settings = Depends(get_settings)) -> dict:
+    if settings.app_env.lower() != "lab" or payload.redirect_uri != settings.google_extension_redirect_uri:
+        raise HTTPException(status_code=403, detail="Google login is not configured for this redirect")
+    token = _exchange_google_code(payload.code, payload.code_verifier,
+                                  settings.google_extension_redirect_uri, settings)
     claims = verify_google_token(token, settings, payload.nonce)
     return {"id_token": token, "sub": claims["sub"], "email": claims["email"], "exp": claims["exp"]}
+
+
+@app.get("/v1/auth/dashboard/start")
+def start_dashboard_login(settings: Settings = Depends(get_settings)) -> RedirectResponse:
+    redirect_uri = settings.google_analytics_redirect_uri
+    if (settings.app_env.lower() != "lab" or not settings.google_oauth_client_id or
+            not settings.google_oauth_client_secret or not redirect_uri or
+            not settings.content_viewer_subs or not settings.pilot_department_code):
+        raise HTTPException(status_code=503, detail="Dashboard login is not configured")
+
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    authorization_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
+        "client_id": settings.google_oauth_client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email",
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "hd": settings.google_workspace_domain,
+    })
+    response = RedirectResponse(authorization_url, status_code=302)
+    response.headers["Cache-Control"] = "no-store"
+    secure = settings.app_env.lower() == "lab"
+    for name, value in zip(_DASHBOARD_OAUTH_COOKIES, (state, nonce, verifier)):
+        response.set_cookie(name, value, max_age=600, path=_DASHBOARD_OAUTH_COOKIE_PATH,
+                            secure=secure, httponly=True, samesite="lax")
+    return response
+
+
+@app.get("/v1/auth/dashboard/callback")
+def finish_dashboard_login(code: str, state: str, request: Request,
+                           settings: Settings = Depends(get_settings)) -> RedirectResponse:
+    redirect_uri = settings.google_analytics_redirect_uri
+    cookie_state = request.cookies.get("analytics_oauth_state", "")
+    nonce = request.cookies.get("analytics_oauth_nonce", "")
+    verifier = request.cookies.get("analytics_oauth_verifier", "")
+    if (settings.app_env.lower() != "lab" or not redirect_uri or not code or len(code) > 4096 or
+            not state or len(state) > 256 or not cookie_state or not secrets.compare_digest(state, cookie_state) or
+            not nonce or not verifier):
+        raise HTTPException(status_code=400, detail="Invalid dashboard OAuth callback")
+
+    token = _exchange_google_code(code, verifier, redirect_uri, settings)
+    claims = verify_google_token(token, settings, nonce)
+    dashboard_operator_department(claims, settings)
+
+    response = RedirectResponse("/analytics/", status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    secure = _dashboard_cookie_secure(request, settings)
+    response.set_cookie("analytics_session", token,
+                        max_age=max(1, claims["exp"] - int(datetime.now(timezone.utc).timestamp())),
+                        path="/v1", secure=secure, httponly=True, samesite="lax")
+    for name in _DASHBOARD_OAUTH_COOKIES:
+        response.delete_cookie(name, path=_DASHBOARD_OAUTH_COOKIE_PATH, secure=secure,
+                               httponly=True, samesite="lax")
+    return response
+
+
+@app.get("/analytics/", include_in_schema=False)
+def analytics_dashboard() -> FileResponse:
+    return FileResponse(ANALYTICS_DIR / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/v1/auth/dashboard/session")
+def dashboard_session(response: Response, claims: dict = Depends(require_dashboard_session)) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return {"authenticated": True, "email": claims["email"], "expires_at": claims["exp"]}
+
+
+@app.post("/v1/auth/dashboard/logout")
+def dashboard_logout(request: Request, settings: Settings = Depends(get_settings)) -> Response:
+    response = Response(status_code=204)
+    response.headers["Cache-Control"] = "no-store"
+    response.delete_cookie("analytics_session", path="/v1",
+                           secure=_dashboard_cookie_secure(request, settings), httponly=True, samesite="lax")
+    return response
 
 
 @app.get("/v1/stream-captures/recent")
@@ -157,7 +258,7 @@ def recent_stream_captures(department_code: str | None = Depends(require_operato
                       response_chars, bytes, chunks, frames, done_markers, protocol_done,
                       reader_done, reader_aborted_after_done, truncated, stream_elapsed_ms,
                       event_types_json, event_shapes_json, event_sequence_json, observed_at, received_at
-               FROM stream_captures WHERE (? IS NULL OR department_code = ?)
+               FROM stream_captures WHERE (CAST(? AS TEXT) IS NULL OR department_code = ?)
                ORDER BY received_at DESC LIMIT 20""", (department_code, department_code)
         ).fetchall()
     items = []
@@ -178,7 +279,7 @@ def recent_artifact_metadata(department_code: str | None = Depends(require_opera
             """SELECT artifact_id, device_installation_id, attributed_person, employee_id, department_code, machine_key_fingerprint,
                       platform, source, file_name, mime_type, size_bytes, conversation_id,
                       conversation_context_source, size_source, observed_at, received_at
-               FROM artifact_metadata WHERE (? IS NULL OR department_code = ?)
+               FROM artifact_metadata WHERE (CAST(? AS TEXT) IS NULL OR department_code = ?)
                ORDER BY received_at DESC LIMIT 20""", (department_code, department_code)
         ).fetchall()
     return {"items": [dict(row) for row in rows]}
@@ -189,10 +290,50 @@ class MachineEnrollment(BaseModel):
     public_key: dict
 
 
+class MachineAssignmentRequest(BaseModel):
+    employee_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._@:-]+$")
+
+
 @app.post("/v1/machines")
 def register_machine(payload: MachineEnrollment, google_sub: str | None = Depends(require_capture_token),
                      settings: Settings = Depends(get_settings)) -> dict:
     return enroll_machine(payload.installation_id, payload.public_key, settings, google_sub)
+
+
+@app.post("/v1/machines/{installation_id}/assignment-request")
+def request_machine_assignment(installation_id: UUID, payload: MachineAssignmentRequest,
+                               machine: Machine | None = Depends(require_machine_proof),
+                               settings: Settings = Depends(get_settings)) -> dict:
+    if machine is None or machine.installation_id != str(installation_id):
+        raise HTTPException(status_code=403, detail="Installation proof required")
+    with connect(settings) as db:
+        begin_write(db, "machines")
+        employee = db.execute(
+            """SELECT e.person_name, e.department_code FROM employees e
+               JOIN departments d USING (department_code)
+               WHERE e.employee_id = ? AND e.active = 1 AND d.active = 1""",
+            (payload.employee_id,),
+        ).fetchone()
+        if employee is None:
+            raise HTTPException(status_code=404, detail="Active employee code not found")
+        row = db.execute("SELECT employee_id, revoked_at, requested_employee_id, requested_at FROM machines WHERE installation_id = ?",
+                         (str(installation_id),)).fetchone()
+        if row is None or row["revoked_at"]:
+            raise HTTPException(status_code=403, detail="Installation is unavailable")
+        if row["employee_id"]:
+            raise HTTPException(status_code=409, detail="Installation is already assigned")
+        if row["requested_employee_id"]:
+            if row["requested_employee_id"] != payload.employee_id:
+                raise HTTPException(status_code=409, detail="Another assignment request is already pending")
+            return {"status": "pending", "employee_id": payload.employee_id,
+                    "person_name": employee["person_name"], "department_code": employee["department_code"],
+                    "requested_at": row["requested_at"]}
+        requested_at = iso(utc_now())
+        db.execute("UPDATE machines SET requested_employee_id = ?, requested_at = ? WHERE installation_id = ?",
+                   (payload.employee_id, requested_at, str(installation_id)))
+    return {"status": "pending", "employee_id": payload.employee_id,
+            "person_name": employee["person_name"], "department_code": employee["department_code"],
+            "requested_at": requested_at}
 
 
 @app.get("/v1/machines/{installation_id}")
@@ -201,11 +342,115 @@ def get_machine(installation_id: UUID, machine: Machine | None = Depends(require
     if machine is None or machine.installation_id != str(installation_id):
         raise HTTPException(status_code=403, detail="Installation proof required")
     with connect(settings) as db:
-        row = db.execute("SELECT installation_id, key_fingerprint, person_name, project_id, employee_id, department_code FROM machines WHERE installation_id = ?",
+        row = db.execute("SELECT installation_id, key_fingerprint, person_name, project_id, employee_id, department_code, requested_employee_id, requested_at FROM machines WHERE installation_id = ?",
                          (str(installation_id),)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Machine not enrolled")
     return dict(row)
+
+
+@app.get("/v1/admin/machines/assignment-requests")
+def list_machine_assignment_requests(
+    department_code: str | None = Depends(require_analytics_operator),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    with connect(settings) as db:
+        rows = db.execute(
+            """SELECT m.installation_id, m.key_fingerprint, m.requested_employee_id,
+                      m.requested_at, m.employee_id AS assigned_employee_id, m.revoked_at,
+                      m.google_sub, e.person_name, e.department_code, e.active AS employee_active,
+                      d.department_name, d.active AS department_active
+               FROM machines m
+               LEFT JOIN employees e ON e.employee_id = m.requested_employee_id
+               LEFT JOIN departments d ON d.department_code = e.department_code
+               WHERE m.requested_employee_id IS NOT NULL
+                 AND (CAST(? AS TEXT) IS NULL OR e.department_code = ?)
+               ORDER BY m.requested_at, m.installation_id""",
+            (department_code, department_code),
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["can_approve"] = bool(
+            item["person_name"] and item["department_code"] and item["employee_active"] == 1 and
+            item["department_active"] == 1 and not item["assigned_employee_id"] and not item["revoked_at"] and
+            (settings.app_env.lower() != "lab" or (item["google_sub"] and
+             settings.allows_pilot_department(item["department_code"])))
+        )
+        item.pop("google_sub")
+        items.append(item)
+    return {"items": items}
+
+
+@app.post("/v1/admin/machines/{installation_id}/assignment-request/approve")
+def approve_machine_assignment_request(
+    installation_id: UUID,
+    department_code: str | None = Depends(require_analytics_operator),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    with connect(settings) as db:
+        begin_write(db, "machines")
+        row = db.execute(
+            """SELECT m.requested_employee_id, m.requested_at, m.key_fingerprint,
+                      m.employee_id AS assigned_employee_id, m.revoked_at, m.google_sub,
+                      e.person_name, e.department_code, e.active AS employee_active, d.active AS department_active
+               FROM machines m
+               LEFT JOIN employees e ON e.employee_id = m.requested_employee_id
+               LEFT JOIN departments d ON d.department_code = e.department_code
+               WHERE m.installation_id = ?""",
+            (str(installation_id),),
+        ).fetchone()
+        if row is None or not row["requested_employee_id"]:
+            raise HTTPException(status_code=404, detail="Pending assignment request not found")
+        if department_code and row["department_code"] != department_code:
+            raise HTTPException(status_code=404, detail="Pending assignment request not found")
+        if (row["assigned_employee_id"] or row["revoked_at"] or not row["person_name"] or
+                row["employee_active"] != 1 or row["department_active"] != 1):
+            raise HTTPException(status_code=409, detail="Assignment request is no longer eligible")
+        if settings.app_env.lower() == "lab" and (
+                not row["google_sub"] or not settings.allows_pilot_department(row["department_code"])):
+            raise HTTPException(status_code=403, detail="Installation is outside the authorized pilot")
+        cursor = db.execute(
+            """UPDATE machines
+               SET person_name = ?, employee_id = requested_employee_id, department_code = ?, assigned_at = ?,
+                   requested_employee_id = NULL, requested_at = NULL
+               WHERE installation_id = ? AND requested_employee_id = ? AND requested_at = ?
+                 AND employee_id IS NULL AND revoked_at IS NULL""",
+            (row["person_name"], row["department_code"], iso(utc_now()), str(installation_id),
+             row["requested_employee_id"], row["requested_at"]),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Assignment request changed; refresh and try again")
+    return {"status": "approved", "installation_id": str(installation_id),
+            "employee_id": row["requested_employee_id"], "person_name": row["person_name"]}
+
+
+@app.post("/v1/admin/machines/{installation_id}/assignment-request/reject")
+def reject_machine_assignment_request(
+    installation_id: UUID,
+    department_code: str | None = Depends(require_analytics_operator),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    with connect(settings) as db:
+        begin_write(db, "machines")
+        row = db.execute(
+            """SELECT m.requested_employee_id, m.requested_at, e.department_code
+               FROM machines m LEFT JOIN employees e ON e.employee_id = m.requested_employee_id
+               WHERE m.installation_id = ?""",
+            (str(installation_id),),
+        ).fetchone()
+        if row is None or not row["requested_employee_id"]:
+            raise HTTPException(status_code=404, detail="Pending assignment request not found")
+        if department_code and row["department_code"] != department_code:
+            raise HTTPException(status_code=404, detail="Pending assignment request not found")
+        cursor = db.execute(
+            """UPDATE machines SET requested_employee_id = NULL, requested_at = NULL
+               WHERE installation_id = ? AND requested_employee_id = ? AND requested_at = ?""",
+            (str(installation_id), row["requested_employee_id"], row["requested_at"]),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Assignment request changed; refresh and try again")
+    return {"status": "rejected", "installation_id": str(installation_id)}
 
 
 @app.post(
@@ -231,7 +476,7 @@ def create_interaction(
     interaction_id = str(uuid4())
     source_ip = request.client.host if request.client else None
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "capture_events", "interactions", "machines")
         existing = db.execute(
             "SELECT interaction_id, request_fingerprint, status, received_at FROM interactions WHERE client_event_id = ?",
             (str(payload.client_event_id),),
@@ -275,7 +520,7 @@ def create_interaction(
                 project_id,
                 machine.fingerprint if machine else None,
                 payload.attachments_capture_status,
-                payload.attachments_truncated,
+                int(payload.attachments_truncated),
                 machine.employee_id if machine else None,
                 machine.department_code if machine else None,
                 payload.usage_context,
@@ -309,7 +554,7 @@ def create_response(
     body = payload.model_dump(mode="json")
     request_fingerprint = fingerprint(body)
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "capture_events", "interactions", "responses")
         interaction = db.execute(
             "SELECT interaction_id, device_installation_id, machine_key_fingerprint, department_code FROM interactions WHERE interaction_id = ?", (str(interaction_id),)
         ).fetchone()
@@ -384,7 +629,7 @@ def create_stream_capture(
     received_at = utc_now()
     capture_id = str(payload.capture_id)
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "machines", "stream_captures")
         existing = db.execute(
             "SELECT request_fingerprint, received_at, attributed_person FROM stream_captures WHERE capture_id = ?",
             (capture_id,),
@@ -448,7 +693,7 @@ def create_artifact_metadata(
     received_at = utc_now()
     artifact_id = str(payload.artifact_id)
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "artifact_metadata", "machines")
         existing = db.execute(
             "SELECT request_fingerprint, received_at, attributed_person FROM artifact_metadata WHERE artifact_id = ?",
             (artifact_id,),
@@ -482,11 +727,12 @@ def create_artifact_metadata(
     "/v1/interactions/{interaction_id}",
     response_model=InteractionDetail,
 )
-def get_interaction(interaction_id: UUID, department_code: str | None = Depends(require_operator_token),
+def get_interaction(interaction_id: UUID, response: Response, viewer: dict = Depends(require_content_viewer),
                     settings: Settings = Depends(get_settings)) -> InteractionDetail:
+    response.headers["Cache-Control"] = "no-store"
     with connect(settings) as db:
-        row = db.execute("SELECT * FROM interactions WHERE interaction_id = ? AND (? IS NULL OR department_code = ?)",
-                         (str(interaction_id), department_code, department_code)).fetchone()
+        row = db.execute("SELECT * FROM interactions WHERE interaction_id = ? AND (CAST(? AS TEXT) IS NULL OR department_code = ?)",
+                         (str(interaction_id), viewer["department_code"], viewer["department_code"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
         responses = db.execute(
@@ -497,6 +743,8 @@ def get_interaction(interaction_id: UUID, department_code: str | None = Depends(
             "SELECT event_type, result, error_code, occurred_at FROM capture_events WHERE interaction_id = ? ORDER BY occurred_at",
             (str(interaction_id),),
         ).fetchall()
+        record_privacy_audit(db, "content_read", viewer["actor_sub"],
+                             "GET /v1/interactions/{interaction_id}", 1)
     return InteractionDetail(
         interaction_id=row["interaction_id"],
         client_event_id=row["client_event_id"],

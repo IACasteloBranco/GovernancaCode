@@ -22,7 +22,7 @@ O MVP guarda metadados dos arquivos. Não guarda seus bytes. A classificação d
 
 ## Estado encontrado no repositório
 
-| Área | Implementação encontrada | O que falta comprovar ou fazer |
+| Ãrea | Implementação encontrada | O que falta comprovar ou fazer |
 |---|---|---|
 | Prompt e resposta | Em 10 envios sintéticos consecutivos na conversa Work, os prompts foram únicos, fiéis e atribuídos. As 10 respostas foram marcadas `complete`, mas o banco guardou apenas `ACK-`, enquanto a interface mostrou `ACK-01` a `ACK-10`. Um teste local reproduziu a perda do sufixo em deltas textuais. | `FAIL`: o parser local foi ajustado para anexar `v` textual do evento delta e a suíte focada passou; falta recarregar a extensão e comprovar a igualdade no navegador. Conversas novas e retomadas continuam pendentes. |
 | Funcionário | A instalação está atribuída a um nome e a um ID estável. O backend copia esses valores para os registros. | Conferir a atribuição em uma sequência contínua de interações. |
@@ -31,10 +31,10 @@ O MVP guarda metadados dos arquivos. Não guarda seus bytes. A classificação d
 | Horários | Prompts e respostas têm horários observados e recebidos pelo backend. | Conferir ordem, fuso e associação em envios consecutivos, conversas retomadas e interrupções. |
 | Arquivos | Existem contratos para anexos e uma tabela separada de metadados. A sonda observa rotas específicas de downloads do ChatGPT. | O fluxo de envio de arquivo pelo usuário não está comprovado. O metadado separado não tem vínculo direto com `interaction_id`; nome e tipo devem ser conferidos em um envio sintético. |
 | Bloqueio | A extensão aplica a política local antes do envio. | Comprovar se cada tentativa bloqueada deixa registro persistido com resultado e regra aplicável. |
-| Persistência e retenção | O backend usa SQLite local e remove registros após o prazo configurado, 30 dias por padrão. Há testes de persistência e expiração. | Reexecutar a suíte no estado atual. 30 dias é o padrão do MVP; reavaliar a ampliação para 90 dias depois. |
-| Aprovação dos critérios | `policies/README.md` descreve a política ativa como material de trabalho. A pasta `qa/` não está presente nesta cópia de trabalho. | Aprovar critérios de aceite e decisões de uso dos dados antes de usar conteúdo de funcionários. |
+| Persistência e retenção | O backend usa SQLite local e remove registros de uso e auditoria após o prazo configurado, 90 dias por padrão. Os históricos locais da extensão também expiram em 90 dias. | Configurar e verificar separadamente backups e logs dos provedores para confirmar o prazo integral de 90 dias. |
+| Aprovação dos critérios | `policies/` contém a política ativa da POC. A pasta `qa/` não está presente nesta cópia de trabalho. A política mantém decisões de calibração e retenção pendentes. | Aprovar os critérios de aceite e as decisões de uso dos dados antes de usar conteúdo de funcionários. |
 
-Os ensaios anteriores estão em [relatório de validação da versão 0.4.2](../reports/2026-10-13-validacao-recarga-edicao-v0.4.2.md). A suíte da extensão passou 26 testes nessa rodada. Esses resultados não comprovam operação contínua em Work nem o fluxo de anexos enviados ou o uso analítico.
+Os ensaios anteriores estão em [relatório de validação da versão 0.4.2](../../reports/2026-10-13-validacao-recarga-edicao-v0.4.2.md). A suíte da extensão passou 26 testes nessa rodada. Esses resultados não comprovam operação contínua em Work nem o fluxo de anexos enviados ou o uso analítico.
 
 ## Etapas de análise
 
@@ -118,19 +118,6 @@ Declarar o MVP local válido somente quando:
 
 Esse aceite cobre o MVP local focado em Work. A classificação do modo, a captura em chatbot comum, a implantação nos departamentos, o banco central, a autenticação corporativa e a análise de conteúdo real ficam para etapas posteriores.
 
-## Decisões de governança pendentes
+## Decisões de governança
 
-- Qual fonte fornece identificador e departamento do funcionário?
-Poderiamos fazer isso pelo proprio pop up
-- Quem pode ler prompts e respostas em texto bruto?
-Somente o responsável pelo Projeto, liderança.
-- A análise departamental pode usar conteúdo bruto ou começa por métricas agregadas?
-- Provavelmente vou montar uma análise com uma chave de LLM para buscar padrões, comportamentos e etc.
-- Qual é o prazo aprovado para guardar prompts, respostas, metadados e eventos técnicos?
-Ideal seria de 1 mês para acumular e eu poder fazer um levantamento com uma quantidade maior de dados
-- A empresa permite análise individual de uso ou limita os relatórios a grupos e departamentos?
-Como eu disse, provavelmente devo utilizar uma chave de LLM para estabelecer as métricas e classificações dos nossos dados
-- Como a pessoa é informada sobre a captura e os usos autorizados?
-Eles serão avisados, o uso interno é puramente corporativo com emails corporativos e com fins de uso para produtividade dentro da empresa. Ou seja, fica mais simples para articular essas permissões
-
-Não alterar `policies/` para resolver essas perguntas. Registrar as respostas como decisões humanas antes da coleta com dados reais.
+As decisões recebidas do responsável e as questões ainda abertas estão no [registro de decisões do piloto](DECISOES_GOVERNANCA_PILOTO.md). Não altere `policies/` até que o responsável aprove as mudanças específicas da política.

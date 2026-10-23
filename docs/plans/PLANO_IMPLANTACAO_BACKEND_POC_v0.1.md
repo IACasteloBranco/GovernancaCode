@@ -4,7 +4,7 @@
 **Data:** 23/09/2026  
 **Base:** `POC_EXTENSAO_BACKEND_GOVERNANCA_IA_v0.1.md`
 
-> Plano inicial, preservado como referência histórica. O backend implementado já usa esquema 0.2 e vínculo assinado por instalação; consulte o [estado atual](ESTADO_ATUAL_2026-10-01.md) e o [guia do backend](../backend/README.md) para operação.
+> Plano inicial, preservado como referência histórica. O backend implementado já usa esquema 0.2 e vínculo assinado por instalação; consulte o [estado atual](../archive/ESTADO_ATUAL_2026-10-01.md) e o [guia do backend](../../backend/README.md) para operação.
 
 ## 1. Objetivo
 

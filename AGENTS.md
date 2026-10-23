@@ -42,7 +42,7 @@ Os resultados de casos usam `PASS`, `FAIL`, `BLOCKED`, `NOT_TESTED` ou `POLICY_Q
 
 ## Histórico
 
-`qa/` mantém casos e evidências existentes. `coordination/` mantém registros do fluxo anterior para consulta histórica. Esses arquivos não definem o processo ativo. Veja [Fluxo de trabalho](docs/FLUXO_TRABALHO.md).
+`qa/` mantém casos e evidências existentes. `coordination/` mantém registros do fluxo anterior para consulta histórica. Esses arquivos não definem o processo ativo. Veja [Fluxo de trabalho](docs/guide/FLUXO_TRABALHO.md).
 
 ## Graphify
 

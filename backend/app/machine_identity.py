@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, utils
 from cryptography.hazmat.primitives import hashes, serialization
 from fastapi import Depends, HTTPException, Request
 
-from .db import connect, iso, utc_now
+from .db import begin_write, connect, iso, utc_now
 from .security import require_capture_token, require_machine_viewer
 from .settings import Settings, get_settings
 
@@ -67,7 +67,7 @@ def enroll_machine(installation_id: UUID, jwk: dict, settings: Settings, google_
     identifier = str(installation_id)
     normalized = {field: jwk[field] for field in ("kty", "crv", "x", "y")}
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "machines")
         existing = db.execute("SELECT key_fingerprint, google_sub, revoked_at FROM machines WHERE installation_id = ?",
                               (identifier,)).fetchone()
         if existing and existing["key_fingerprint"] != fingerprint:
@@ -112,7 +112,7 @@ async def verify_machine_signature(request: Request, settings: Settings) -> Mach
     except (InvalidSignature, ValueError) as error:
         raise HTTPException(status_code=401, detail="Invalid machine signature") from error
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "machine_nonces")
         db.execute("DELETE FROM machine_nonces WHERE expires_at <= ?", (iso(utc_now()),))
         if db.execute("SELECT 1 FROM machine_nonces WHERE installation_id = ? AND nonce = ?",
                       (identifier, nonce)).fetchone():
@@ -135,7 +135,7 @@ async def require_machine_signature(request: Request, google_sub: str | None = D
                                     settings: Settings = Depends(get_settings)) -> Machine | None:
     machine = await verify_machine_signature(request, settings)
     if settings.app_env.lower() == "lab" and (machine is None or machine.google_sub != google_sub or
-                                               machine.department_code != settings.pilot_department_code):
+                                               not settings.allows_pilot_department(machine.department_code)):
         raise HTTPException(status_code=403, detail="Installation is not authorized for this pilot")
     if machine is not None and not (machine.person_name and machine.employee_id and machine.department_code):
         raise HTTPException(status_code=403, detail="Machine assignment pending")

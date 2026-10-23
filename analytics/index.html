@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Analytics | Governança de IA</title>
+  <style>
+    :root {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #21364b;
+      background: #f7f8fa;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      --line: #ddd9d0;
+      --muted: #5b6c7d;
+      --navy: #102f4d;
+      --navy-soft: #1d4265;
+      --gold: #c39a45;
+      --gold-light: #e3c36e;
+      --focus: #805c16;
+      --control-border: #82909e;
+      --white: #fff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input { font: inherit; }
+    :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .page { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 24px 0 32px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 76px; padding: 0 0 16px; border-bottom: 1px solid var(--line); position: relative; }
+    .topbar::after { position: absolute; bottom: -1px; left: 0; width: 19%; height: 3px; background: var(--gold); content: ""; }
+    .brand, .partner { display: flex; align-items: center; gap: 11px; color: var(--navy); text-decoration: none; }
+    .brand-mark { display: grid; width: 48px; height: 48px; place-items: center; border: 3px solid var(--navy); border-radius: 50%; box-shadow: inset 0 0 0 2px var(--gold); color: var(--focus); font-size: 15px; font-weight: 800; }
+    .brand-name { font-size: 18px; font-weight: 800; letter-spacing: .035em; }
+    .brand-name span { color: #805c16; }
+    .partner-mark { color: var(--gold); font-size: 28px; line-height: 1; }
+    .partner-name { display: grid; gap: 3px; text-align: right; }
+    .partner-name strong { color: #354252; font-size: 17px; letter-spacing: -.02em; }
+    .partner-name small { color: var(--muted); font-size: 9px; letter-spacing: .24em; }
+    .hero { position: relative; overflow: hidden; margin: 22px 0 18px; padding: clamp(24px, 4vw, 42px); color: var(--white); background: linear-gradient(110deg, #0e2b47, var(--navy-soft)); border-radius: 16px; }
+    .hero::after { position: absolute; top: -84px; right: 12%; width: 250px; height: 250px; border: 26px solid rgb(227 195 110 / 9%); border-radius: 50%; content: ""; pointer-events: none; }
+    .eyebrow { position: relative; z-index: 1; margin: 0 0 10px; color: var(--gold-light); font-size: 12px; font-weight: 750; letter-spacing: .19em; text-transform: uppercase; }
+    h1 { position: relative; z-index: 1; max-width: 760px; margin: 0; font-size: clamp(27px, 4vw, 38px); line-height: 1.16; }
+    .hero p:last-child { position: relative; z-index: 1; margin: 13px 0 0; color: #e1e8ef; font-size: 14px; overflow-wrap: anywhere; }
+    .toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; margin: 0 0 28px; padding: 16px 18px; background: var(--white); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 3px 12px rgb(16 47 77 / 4%); }
+    .field { display: grid; gap: 6px; color: #34495c; font-size: 13px; font-weight: 650; }
+    input { min-height: 44px; padding: 7px 10px; color: #23394e; background: white; border: 1px solid var(--control-border); border-radius: 7px; }
+    input:hover { border-color: var(--navy-soft); }
+    .button { min-height: 44px; padding: 8px 16px; color: white; background: var(--navy); border: 1px solid var(--navy); border-radius: 7px; cursor: pointer; font-weight: 650; transition: background-color .15s ease, transform .15s ease; }
+    .button:hover { background: #1a4265; }
+    .button:active { transform: translateY(1px); }
+    .button.secondary { color: var(--navy); background: white; border-color: var(--control-border); }
+    .button.secondary:hover { background: #f2f4f6; }
+    .login-link { display: inline-flex; min-height: 44px; align-items: center; padding: 8px 16px; color: var(--navy); background: white; border: 1px solid var(--control-border); border-radius: 7px; font-weight: 650; text-decoration: none; }
+    .login-link:hover { background: #f2f4f6; }
+    .grow { flex: 1; }
+    .section-heading { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; color: var(--navy); font-size: 19px; line-height: 1.25; }
+    .section-heading::after { height: 1px; flex: 1; background: var(--line); content: ""; }
+    .section-number { display: grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; color: var(--gold-light); background: var(--navy); border-radius: 10px; font-size: 16px; font-weight: 800; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 0 0 30px; }
+    .card { min-height: 112px; padding: 17px; background: var(--white); border: 1px solid var(--line); border-top: 3px solid var(--gold); border-radius: 10px; box-shadow: 0 4px 14px rgb(16 47 77 / 4%); }
+    .card-label { color: var(--muted); font-size: 13px; font-weight: 650; }
+    .card-value { margin-top: 10px; color: var(--navy); font-size: 29px; font-weight: 750; }
+    .tables { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    .tables > section, .table-wrap { min-width: 0; }
+    .search-section { margin-top: 30px; }
+    .interaction-list { display: grid; gap: 12px; }
+    .interaction { padding: 16px; background: white; border: 1px solid var(--line); border-radius: 10px; }
+    .request-section { margin: 0 0 30px; }
+    .request-list { display: grid; gap: 12px; }
+    .request-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 16px; background: var(--white); border: 1px solid var(--line); border-left: 4px solid var(--gold); border-radius: 10px; box-shadow: 0 4px 14px rgb(16 47 77 / 4%); }
+    .request-card h3 { margin: 0 0 6px; color: var(--navy); font-size: 16px; }
+    .request-card p { margin: 4px 0; color: #34495c; font-size: 13px; overflow-wrap: anywhere; }
+    .request-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .button.approve { border-color: var(--gold); color: var(--navy); background: #f8efd9; }
+    .button.approve:hover { background: #f0e0b9; }
+    .button.danger { color: #76261f; background: white; border-color: #a53b30; }
+    .request-empty { padding: 18px; color: var(--muted); text-align: center; background: white; border: 1px dashed var(--line); border-radius: 10px; }
+    .local-login { align-items: end; }
+    .local-login[hidden] { display: none; }
+    .interaction header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+    .interaction h3 { margin: 12px 0 5px; color: var(--navy); font-size: 14px; }
+    .interaction p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
+    .table-wrap { overflow-x: auto; background: var(--white); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 14px rgb(16 47 77 / 4%); }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid #e8ecef; font-size: 13px; }
+    th { color: var(--navy); background: #f3f5f7; font-size: 12px; font-weight: 700; }
+    td { color: #34495c; }
+    tbody tr:hover { background: #fbfaf6; }
+    td.numeric { text-align: right; font-variant-numeric: tabular-nums; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .status { min-height: 42px; margin: 0 0 20px; padding: 11px 14px; color: #34495c; background: #eef2f5; border-left: 4px solid #7890a3; border-radius: 7px; font-size: 14px; }
+    .status[hidden], [hidden] { display: none !important; }
+    .status.error { color: #76261f; background: #faeae8; border-left-color: #a53b30; }
+    .status.loading { color: #173c59; background: #eaf1f6; border-left-color: var(--gold); }
+    .status.success { color: #245338; background: #e8f3eb; border-left-color: #3b7952; }
+    .empty { padding: 20px; color: var(--muted); text-align: center; }
+    footer { margin-top: 32px; padding-top: 14px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; line-height: 1.6; }
+    @media (max-width: 760px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .tables { grid-template-columns: 1fr; } }
+    @media (max-width: 520px) { .page { width: min(100% - 24px, 1180px); padding-top: 16px; } .topbar { min-height: 64px; gap: 8px; padding-bottom: 12px; } .brand { gap: 7px; } .brand-mark { width: 38px; height: 38px; font-size: 12px; } .brand-name { font-size: 12px; } .partner { gap: 5px; } .partner-mark { font-size: 18px; } .partner-name strong { font-size: 11px; } .partner-name small { font-size: 6px; letter-spacing: .1em; } .hero { margin-top: 16px; padding: 24px 20px; } .toolbar { align-items: stretch; padding: 14px; } .field { flex: 1 1 130px; } .field input { width: 100%; } .grow { display: none; } .button, .login-link { flex: 1 1 100%; justify-content: center; } .cards { gap: 10px; } .card { min-height: 100px; padding: 13px; } .card-label { font-size: 12px; } .card-value { font-size: 25px; } .section-heading { gap: 9px; font-size: 17px; } .section-number { width: 34px; height: 34px; flex-basis: 34px; } .request-card { grid-template-columns: 1fr; } .request-actions .button { flex: 1; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div class="brand" aria-label="Governança de IA">
+        <span class="brand-mark" aria-hidden="true">IA</span>
+        <span class="brand-name">GOVERNANÇA <span>IA</span></span>
+      </div>
+      <div class="partner" aria-label="Castelo Branco Contabilidade Avançada">
+        <span class="partner-mark" aria-hidden="true">✦</span>
+        <span class="partner-name"><strong>CASTELO BRANCO</strong><small>CONTABILIDADE AVANÇADA</small></span>
+      </div>
+    </header>
+    <section class="hero" aria-labelledby="page-title">
+      <p class="eyebrow">Acompanhamento de uso</p>
+      <h1 id="page-title">Analytics de Governança de IA</h1>
+      <p id="account" aria-live="polite">Verificando sessão do operador...</p>
+    </section>
+    <div id="status" class="status loading" role="status" aria-live="polite">Verificando sessão autorizada.</div>
+    <form id="filters" class="toolbar" aria-label="Filtros do período">
+      <label class="field">Data inicial<input id="from" name="from" type="date"></label>
+      <label class="field">Data final<input id="to" name="to" type="date"></label>
+      <button class="button" type="submit">Atualizar dados</button>
+      <span class="grow"></span>
+      <a id="login" class="login-link" href="/v1/auth/dashboard/start">Entrar com Google Workspace</a>
+      <button id="logout" class="button secondary" type="button" hidden>Sair</button>
+    </form>
+    <form id="local-login" class="toolbar local-login" hidden aria-label="Sessão local do operador">
+      <label class="field">Token local do operador<input id="operator-token" type="password" autocomplete="current-password" required></label>
+      <button class="button" type="submit">Entrar no modo local</button>
+    </form>
+    <section id="assignment-inbox" class="request-section" aria-labelledby="assignment-title" hidden>
+      <h2 id="assignment-title" class="section-heading"><span>Solicitações de vínculo</span></h2>
+      <p id="assignment-status" role="status" aria-live="polite"></p>
+      <div id="assignment-requests" class="request-list" aria-live="polite"></div>
+    </section>
+    <section aria-labelledby="totals-title">
+      <h2 id="totals-title" class="section-heading"><span class="section-number" aria-hidden="true">1</span><span>Resumo do período</span></h2>
+      <div class="cards" id="totals" aria-live="polite">
+        <article class="card"><div class="card-label">Chats iniciados</div><div class="card-value" data-total="interactions">—</div></article>
+        <article class="card"><div class="card-label">Respostas registradas</div><div class="card-value" data-total="responses">—</div></article>
+        <article class="card"><div class="card-label">Capturas de interação</div><div class="card-value" data-total="stream_captures">—</div></article>
+        <article class="card"><div class="card-label">Arquivos enviados/recebidos</div><div class="card-value" data-total="artifact_metadata">—</div></article>
+      </div>
+    </section>
+    <div class="tables">
+      <section aria-labelledby="departments-title">
+        <h2 id="departments-title" class="section-heading"><span class="section-number" aria-hidden="true">2</span><span>Por departamento</span></h2>
+        <div class="table-wrap" tabindex="0" role="region" aria-labelledby="departments-title"><table><thead><tr><th scope="col">Departamento</th><th scope="col">Chats iniciados</th><th scope="col">Respostas</th></tr></thead><tbody id="departments"></tbody></table></div>
+      </section>
+      <section aria-labelledby="employees-title">
+        <h2 id="employees-title" class="section-heading"><span class="section-number" aria-hidden="true">3</span><span>Por colaborador</span></h2>
+        <div class="table-wrap" tabindex="0" role="region" aria-labelledby="employees-title"><table><thead><tr><th scope="col">Colaborador</th><th scope="col">Departamento</th><th scope="col">Chats iniciados</th></tr></thead><tbody id="employees"></tbody></table></div>
+      </section>
+    </div>
+    <section class="search-section" aria-labelledby="search-title">
+      <h2 id="search-title" class="section-heading"><span class="section-number" aria-hidden="true">4</span><span>Buscar interações</span></h2>
+      <form id="interaction-search" class="toolbar" aria-label="Filtros de interações">
+        <label class="field">Departamento<input id="search-department" type="text" maxlength="128" placeholder="Código do departamento"></label>
+        <label class="field">Colaborador<input id="search-employee" type="text" maxlength="128" placeholder="ID do colaborador"></label>
+        <label class="field">Data inicial<input id="search-from" type="date"></label>
+        <label class="field">Data final<input id="search-to" type="date"></label>
+        <button class="button" type="submit">Buscar</button>
+      </form>
+      <div id="interaction-results" class="interaction-list" aria-live="polite"></div>
+      <nav id="interaction-pagination" class="pagination" aria-label="Paginação das interações" hidden>
+        <button id="search-previous" class="button secondary" type="button">Anterior</button>
+        <span id="search-page"></span>
+        <button id="search-next" class="button secondary" type="button">Próxima</button>
+      </nav>
+    </section>
+    <footer>Os indicadores apresentam dados agregados disponíveis no período de retenção. O volume de uso, isoladamente, não mede desempenho.</footer>
+  </main>
+  <script>
+    const state = { authenticated: false, operatorToken: null, busy: false, searchBusy: false, searchOffset: 0, searchTotal: 0, searchLimit: 25 };
+    const statusBox = document.querySelector("#status");
+    const account = document.querySelector("#account");
+    const logoutButton = document.querySelector("#logout");
+    const loginLink = document.querySelector("#login");
+    const numberFormat = new Intl.NumberFormat("pt-BR");
+    const operatorHeaders = () => state.operatorToken ? { Authorization: `Bearer ${state.operatorToken}` } : {};
+
+    function showStatus(message, kind = "") {
+      statusBox.textContent = message;
+      statusBox.className = `status ${kind}`.trim();
+      statusBox.hidden = !message;
+    }
+
+    function clearData() {
+      document.querySelectorAll("[data-total]").forEach((node) => { node.textContent = "—"; });
+      document.querySelector("#departments").replaceChildren();
+      document.querySelector("#employees").replaceChildren();
+      document.querySelector("#interaction-results").replaceChildren();
+      document.querySelector("#interaction-pagination").hidden = true;
+      document.querySelector("#assignment-inbox").hidden = true;
+      document.querySelector("#assignment-requests").replaceChildren();
+    }
+
+    function addCell(row, value, numeric = false) {
+      const cell = document.createElement("td");
+      cell.textContent = value == null || value === "" ? "Não atribuído" : String(value);
+      if (numeric) {
+        cell.className = "numeric";
+        cell.textContent = numberFormat.format(Number(value || 0));
+      }
+      row.append(cell);
+    }
+
+    function renderRows(target, rows, columns, emptyMessage) {
+      target.replaceChildren();
+      if (!rows.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = columns.length;
+        cell.className = "empty";
+        cell.textContent = emptyMessage;
+        row.append(cell);
+        target.append(row);
+        return;
+      }
+      for (const item of rows) {
+        const row = document.createElement("tr");
+        for (const [key, numeric] of columns) addCell(row, item[key], numeric);
+        target.append(row);
+      }
+    }
+
+    async function loadSummary() {
+      if (!state.authenticated || state.busy) return;
+      state.busy = true;
+      showStatus("Carregando resumo do período...", "loading");
+      const query = new URLSearchParams();
+      const from = document.querySelector("#from").value;
+      const to = document.querySelector("#to").value;
+      if (from) query.set("from", new Date(`${from}T00:00:00`).toISOString());
+      if (to) {
+        const endExclusive = new Date(`${to}T00:00:00`);
+        endExclusive.setDate(endExclusive.getDate() + 1);
+        query.set("to", endExclusive.toISOString());
+      }
+      try {
+        const response = await fetch(`/v1/admin/analytics/summary${query.size ? `?${query}` : ""}`, {
+          credentials: "same-origin", headers: { Accept: "application/json", ...operatorHeaders() }, cache: "no-store"
+        });
+        if (response.status === 401 || response.status === 403) {
+          state.authenticated = false;
+          clearData();
+          logoutButton.hidden = true;
+          loginLink.hidden = false;
+          account.textContent = "Sua sessão expirou ou não tem autorização.";
+          showStatus("Acesso encerrado. Entre novamente com a conta autorizada.", "error");
+          return;
+        }
+        if (!response.ok) throw new Error(response.status === 422 ? "Confira o intervalo informado." : "Não foi possível consultar o analytics.");
+        const data = await response.json();
+        for (const [key, value] of Object.entries(data.totals)) {
+          const element = document.querySelector(`[data-total="${key}"]`);
+          if (element) element.textContent = numberFormat.format(Number(value || 0));
+        }
+        renderRows(document.querySelector("#departments"), data.by_department, [["department_name"], ["interactions", true], ["responses", true]], "Sem atividade neste período.");
+        renderRows(document.querySelector("#employees"), data.by_employee, [["person_name"], ["department_name"], ["interactions", true]], "Sem atividade neste período.");
+        showStatus(data.by_employee.length ? "Resumo atualizado." : "Não há atividade registrada neste período.", data.by_employee.length ? "success" : "");
+      } catch (error) {
+        clearData();
+        showStatus(error instanceof TypeError ? "Falha de conexão com o serviço. Tente novamente." : error.message, "error");
+      } finally {
+        state.busy = false;
+      }
+    }
+
+    async function loadAssignmentRequests() {
+      if (!state.authenticated) return;
+      const inbox = document.querySelector("#assignment-inbox");
+      const target = document.querySelector("#assignment-requests");
+      const message = document.querySelector("#assignment-status");
+      inbox.hidden = false;
+      message.textContent = "Carregando pedidos pendentes...";
+      try {
+        const response = await fetch("/v1/admin/machines/assignment-requests", {
+          credentials: "same-origin", headers: { Accept: "application/json", ...operatorHeaders() }, cache: "no-store"
+        });
+        if (!response.ok) throw new Error(response.status === 401 || response.status === 403
+          ? "Sua sessão não tem autorização para consultar os pedidos." : "Não foi possível carregar os pedidos.");
+        const data = await response.json();
+        target.replaceChildren();
+        if (!data.items.length) {
+          const empty = document.createElement("div");
+          empty.className = "request-empty";
+          empty.textContent = "Nenhuma solicitação pendente.";
+          target.append(empty);
+        }
+        for (const item of data.items) {
+          const card = document.createElement("article");
+          card.className = "request-card";
+          const details = document.createElement("div");
+          const title = document.createElement("h3");
+          title.textContent = `${item.person_name || "Colaborador não localizado"} · ${item.department_name || item.department_code || "Departamento indisponível"}`;
+          const employee = document.createElement("p");
+          employee.textContent = `Código: ${item.requested_employee_id}`;
+          const installation = document.createElement("p");
+          installation.textContent = `Instalação: ${item.installation_id}`;
+          const fingerprint = document.createElement("p");
+          fingerprint.textContent = `Fingerprint: ${item.key_fingerprint}`;
+          const requested = document.createElement("p");
+          requested.textContent = `Solicitado em ${new Date(item.requested_at).toLocaleString("pt-BR")}`;
+          details.append(title, employee, installation, fingerprint, requested);
+          if (!item.can_approve) {
+            const eligibility = document.createElement("p");
+            eligibility.textContent = "Cadastro ou instalação precisa ser revisado antes da aprovação.";
+            details.append(eligibility);
+          }
+          const actions = document.createElement("div");
+          actions.className = "request-actions";
+          const approve = document.createElement("button");
+          approve.className = "button approve";
+          approve.type = "button";
+          approve.textContent = "Aprovar vínculo";
+          approve.disabled = !item.can_approve;
+          approve.setAttribute("aria-label", `Aprovar vínculo de ${item.person_name || item.requested_employee_id}`);
+          approve.addEventListener("click", () => decideAssignment(item, "approve"));
+          const reject = document.createElement("button");
+          reject.className = "button danger";
+          reject.type = "button";
+          reject.textContent = "Recusar";
+          reject.addEventListener("click", () => decideAssignment(item, "reject"));
+          actions.append(approve, reject);
+          card.append(details, actions);
+          target.append(card);
+        }
+        message.textContent = `${data.items.length} solicitação(ões) pendente(s).`;
+      } catch (error) {
+        target.replaceChildren();
+        message.textContent = error instanceof TypeError ? "Falha de conexão ao carregar os pedidos." : error.message;
+      }
+    }
+
+    async function decideAssignment(item, decision) {
+      const approve = decision === "approve";
+      const action = approve ? "Aprovar" : "Recusar";
+      const detail = `${item.person_name || item.requested_employee_id} (${item.requested_employee_id})\nInstalação: ${item.installation_id}\nFingerprint: ${item.key_fingerprint}`;
+      if (!window.confirm(`${action} este pedido de vínculo?\n\n${detail}`)) return;
+      const message = document.querySelector("#assignment-status");
+      message.textContent = `${action} pedido...`;
+      try {
+        const response = await fetch(`/v1/admin/machines/${encodeURIComponent(item.installation_id)}/assignment-request/${decision}`, {
+          method: "POST", credentials: "same-origin", headers: { Accept: "application/json", ...operatorHeaders() }, cache: "no-store"
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(response.status === 409
+          ? "O pedido mudou ou deixou de ser válido. Atualizei a lista; confira os dados." : result.detail || `Não foi possível ${action.toLowerCase()} o pedido.`);
+        const outcome = approve ? `Vínculo aprovado para ${result.person_name}.` : "Pedido recusado.";
+        await loadAssignmentRequests();
+        message.textContent = outcome;
+      } catch (error) {
+        const failure = error instanceof TypeError ? "Falha de conexão ao processar o pedido." : error.message;
+        if (error.message.includes("Atualizei a lista")) await loadAssignmentRequests();
+        message.textContent = failure;
+      }
+    }
+
+    function localDateStart(value) { return value ? new Date(`${value}T00:00:00`).toISOString() : ""; }
+    function localDateEnd(value) {
+      if (!value) return "";
+      const date = new Date(`${value}T00:00:00`);
+      date.setDate(date.getDate() + 1);
+      return date.toISOString();
+    }
+
+    async function searchInteractions(offset = 0) {
+      if (!state.authenticated || state.searchBusy) return;
+      state.searchBusy = true;
+      showStatus("Buscando interações...", "loading");
+      const query = new URLSearchParams({ limit: String(state.searchLimit), offset: String(offset) });
+      const filters = [
+        ["department_code", document.querySelector("#search-department").value.trim()],
+        ["employee_id", document.querySelector("#search-employee").value.trim()],
+        ["from", localDateStart(document.querySelector("#search-from").value)],
+        ["to", localDateEnd(document.querySelector("#search-to").value)],
+      ];
+      for (const [key, value] of filters) if (value) query.set(key, value);
+      try {
+        const response = await fetch(`/v1/admin/analytics/interactions?${query}`, {
+          credentials: "same-origin", headers: { Accept: "application/json", ...operatorHeaders() }, cache: "no-store"
+        });
+        if (response.status === 401 || response.status === 403) throw new Error("A sessão expirou ou não tem autorização.");
+        if (!response.ok) throw new Error(response.status === 422 ? "Confira os filtros e o intervalo informado." : "Não foi possível buscar as interações.");
+        const data = await response.json();
+        state.searchOffset = data.offset;
+        state.searchTotal = data.total;
+        const results = document.querySelector("#interaction-results");
+        results.replaceChildren();
+        for (const item of data.items) {
+          const article = document.createElement("article");
+          article.className = "interaction";
+          const header = document.createElement("header");
+          const person = document.createElement("span");
+          person.textContent = `${item.person_name} · ${item.department_name || "Sem departamento"} · ${item.employee_id || "Sem ID"}`;
+          const timestamp = document.createElement("time");
+          timestamp.dateTime = item.received_at;
+          timestamp.textContent = new Date(item.received_at).toLocaleString("pt-BR");
+          header.append(person, timestamp);
+          const promptTitle = document.createElement("h3");
+          promptTitle.textContent = "Prompt";
+          const prompt = document.createElement("p");
+          prompt.textContent = item.prompt.text || "(sem texto capturado)";
+          article.append(header, promptTitle, prompt);
+          if (item.response !== null) {
+            const responseTitle = document.createElement("h3");
+            responseTitle.textContent = "Resposta";
+            const responseText = document.createElement("p");
+            responseText.textContent = item.response;
+            article.append(responseTitle, responseText);
+          }
+          results.append(article);
+        }
+        const pagination = document.querySelector("#interaction-pagination");
+        pagination.hidden = data.total === 0;
+        document.querySelector("#search-page").textContent = `${data.total ? data.offset + 1 : 0}–${Math.min(data.offset + data.items.length, data.total)} de ${numberFormat.format(data.total)}`;
+        document.querySelector("#search-previous").disabled = data.offset === 0;
+        document.querySelector("#search-next").disabled = data.offset + data.items.length >= data.total;
+        showStatus(data.total ? "Resultados carregados." : "Nenhuma interação encontrada com esses filtros.", data.total ? "success" : "");
+      } catch (error) {
+        document.querySelector("#interaction-results").replaceChildren();
+        document.querySelector("#interaction-pagination").hidden = true;
+        showStatus(error instanceof TypeError ? "Falha de conexão com o serviço. Tente novamente." : error.message, "error");
+      } finally {
+        state.searchBusy = false;
+      }
+    }
+
+    async function checkSession() {
+      try {
+        const response = await fetch("/v1/auth/dashboard/session", { credentials: "same-origin", cache: "no-store" });
+        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "login" : "service");
+        const session = await response.json();
+        state.authenticated = session.authenticated === true;
+        if (!state.authenticated) throw new Error("login");
+        account.textContent = `Conectado como ${session.email}`;
+        logoutButton.hidden = false;
+        loginLink.hidden = true;
+        document.querySelector("#local-login").hidden = true;
+        await Promise.all([loadSummary(), loadAssignmentRequests()]);
+      } catch (error) {
+        state.authenticated = false;
+        logoutButton.hidden = true;
+        loginLink.hidden = false;
+        clearData();
+        if (error.message === "login") {
+          const localHost = ["localhost", "127.0.0.1"].includes(location.hostname);
+          document.querySelector("#local-login").hidden = !localHost;
+          loginLink.hidden = localHost;
+          account.textContent = localHost
+            ? "Modo local. Entre com o token de operador configurado no backend."
+            : "Entre com a conta Workspace autorizada para consultar os dados.";
+          showStatus(localHost ? "A sessão local do operador é necessária para ver os pedidos." : "É necessário entrar para carregar o resumo.", "");
+        } else {
+          account.textContent = "Não foi possível verificar o serviço.";
+          showStatus("Falha ao verificar a sessão. Tente novamente.", "error");
+        }
+      }
+    }
+
+    document.querySelector("#filters").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (document.querySelector("#from").value && document.querySelector("#to").value &&
+          document.querySelector("#from").value > document.querySelector("#to").value) {
+        showStatus("A data inicial deve ser anterior ou igual à data final.", "error");
+        return;
+      }
+      await loadSummary();
+    });
+    document.querySelector("#interaction-search").addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (document.querySelector("#search-from").value && document.querySelector("#search-to").value &&
+          document.querySelector("#search-from").value > document.querySelector("#search-to").value) {
+        showStatus("A data inicial deve ser anterior ou igual à data final.", "error");
+        return;
+      }
+      searchInteractions(0);
+    });
+    document.querySelector("#search-previous").addEventListener("click", () => searchInteractions(Math.max(0, state.searchOffset - state.searchLimit)));
+    document.querySelector("#search-next").addEventListener("click", () => searchInteractions(state.searchOffset + state.searchLimit));
+    document.querySelector("#local-login").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const token = document.querySelector("#operator-token").value;
+      try {
+        const response = await fetch("/v1/admin/machines/assignment-requests", {
+          credentials: "same-origin", headers: { Accept: "application/json", Authorization: `Bearer ${token}` }, cache: "no-store"
+        });
+        if (!response.ok) {
+          showStatus(response.status === 401 || response.status === 403
+            ? "Token recusado ou sem autorização de operador." : "Não foi possível iniciar a sessão local.", "error");
+          return;
+        }
+        state.operatorToken = token;
+        state.authenticated = true;
+        document.querySelector("#operator-token").value = "";
+        document.querySelector("#local-login").hidden = true;
+        loginLink.hidden = true;
+        logoutButton.hidden = false;
+        account.textContent = "Sessão local do operador ativa nesta aba.";
+        showStatus("Sessão local iniciada.", "success");
+        await Promise.all([loadSummary(), loadAssignmentRequests()]);
+      } catch {
+        showStatus("Falha de conexão ao iniciar a sessão local.", "error");
+      }
+    });
+    logoutButton.addEventListener("click", async () => {
+      logoutButton.disabled = true;
+      try {
+        if (state.operatorToken) {
+          state.operatorToken = null;
+          state.authenticated = false;
+          account.textContent = "Sessão local encerrada.";
+          clearData();
+          logoutButton.hidden = true;
+          document.querySelector("#local-login").hidden = false;
+          showStatus("Sessão local encerrada.", "success");
+          return;
+        }
+        const response = await fetch("/v1/auth/dashboard/logout", { method: "POST", credentials: "same-origin" });
+        if (!response.ok) throw new Error();
+        state.authenticated = false;
+        account.textContent = "Sessão encerrada.";
+        clearData();
+        logoutButton.hidden = true;
+        loginLink.hidden = false;
+        showStatus("Sessão encerrada.", "success");
+      } catch {
+        showStatus("Não foi possível encerrar a sessão. Tente novamente.", "error");
+      } finally {
+        logoutButton.disabled = false;
+      }
+    });
+
+    checkSession();
+  </script>
+</body>
+</html>

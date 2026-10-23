@@ -3,14 +3,19 @@
   const policyAttribute = 'data-governanca-block-prompts';
   const untilAttribute = 'data-governanca-allow-until';
   const destination = 'not_approved';
+  const protocolVersion = 1;
   const platform = globalThis.GovernancaPlatform;
   const messages = globalThis.GovernancaPolicyMessages || {
     primary: () => 'ENGINE', describe: () => 'Envio retido: não foi possível mostrar o motivo da política.'
   };
   let manualBlocked = null;
   let policySynchronized = false;
+  let workerCompatible = false;
+  let mainCompatible = false;
+  let compatibilityNoticeShown = false;
   let machineAssigned = false;
   let authExpiresAt = null;
+  let policyGeneration = 0;
   let verification = 0;
   let lastAttempt = {at: 0, text: '', attachments: '', action: ''};
   let pendingRegeneration = null;
@@ -26,12 +31,17 @@
 
   function verifyMain() {
     const current = ++verification;
+    mainCompatible = false;
+    policySynchronized = false;
+    resetGrant();
     window.postMessage({marker, phase: 'ping'}, location.origin);
     setTimeout(() => {
       if (verification !== current) return;
+      reportCompatibilityProblem();
       chrome.runtime.sendMessage({type: 'blocker_health', mainActive: false,
         blocked: manualBlocked !== false, synchronized: policySynchronized,
-        machineAssigned, authExpired: authExpiresAt !== null && Date.now() >= authExpiresAt}).catch(() => {});
+        machineAssigned, authExpired: authExpiresAt !== null && Date.now() >= authExpiresAt,
+        protocolCompatible: false}).catch(() => {});
     }, 1000);
   }
   function connect() {
@@ -39,15 +49,21 @@
       const port = chrome.runtime.connect({name: 'prompt-block-policy'});
       port.onMessage.addListener(message => {
         if (message?.type !== 'block_policy') return;
+        policyGeneration++;
+        workerCompatible = message.protocolVersion === protocolVersion && message.protocolCompatible === true;
         manualBlocked = message.blocked === true;
-        machineAssigned = message.machineAssigned === true;
+        machineAssigned = workerCompatible && message.machineAssigned === true;
         authExpiresAt = Number.isSafeInteger(message.authExpiresAt) ? message.authExpiresAt : null;
-        policySynchronized = true;
+        policySynchronized = false;
         resetGrant();
         lastAttempt = {at: 0, text: '', attachments: '', action: ''};
+        if (!workerCompatible) reportCompatibilityProblem();
         verifyMain();
       });
       port.onDisconnect.addListener(() => {
+        policyGeneration++;
+        workerCompatible = false;
+        mainCompatible = false;
         manualBlocked = null;
         policySynchronized = false;
         machineAssigned = false;
@@ -56,7 +72,7 @@
         lastAttempt = {at: 0, text: '', attachments: '', action: ''};
         setTimeout(connect, 1000);
       });
-      port.postMessage({type: 'block_status'});
+      port.postMessage({type: 'block_status', protocolVersion});
     } catch { setTimeout(connect, 1000); }
   }
   connect();
@@ -83,6 +99,13 @@
     toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#182a35;color:white;padding:10px 16px;border-radius:8px;font:14px system-ui;box-shadow:0 2px 12px #0005';
     (document.body || document.documentElement).append(toast);
     setTimeout(() => toast.remove(), 8000);
+  }
+  function reportCompatibilityProblem() {
+    policySynchronized = false;
+    resetGrant();
+    if (compatibilityNoticeShown) return;
+    compatibilityNoticeShown = true;
+    showNotice('Não foi possível confirmar a versão da extensão. Preserve seu rascunho, recarregue a extensão e esta aba do ChatGPT.', true);
   }
   function logDecision(decision, method) {
     try {
@@ -205,9 +228,55 @@
   }, true);
   window.addEventListener('message', event => {
     if (event.source !== window || event.origin !== location.origin || event.data?.marker !== marker) return;
+    if (event.data.phase === 'backend_preflight' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.data.requestId || '')) {
+      const generation = policyGeneration;
+      if (event.data.protocolVersion !== protocolVersion) {
+        window.postMessage({marker, phase: 'backend_preflight_result', requestId: event.data.requestId,
+          protocolVersion, available: false, reason: 'extension_mismatch'}, location.origin);
+        return;
+      }
+      const policyAllows = () => policySynchronized && manualBlocked !== true && machineAssigned &&
+        (authExpiresAt === null || Date.now() < authExpiresAt);
+      if (!policyAllows()) {
+        window.postMessage({marker, phase: 'backend_preflight_result', requestId: event.data.requestId,
+          protocolVersion, available: false, reason: 'capture_unavailable'}, location.origin);
+        return;
+      }
+      chrome.runtime.sendMessage({type: 'backend_preflight', protocolVersion}).then(result => {
+        const stillAllowed = generation === policyGeneration && policyAllows();
+        const responseCompatible = result?.ok === true && result.data?.protocolVersion === protocolVersion;
+        const available = stillAllowed && responseCompatible && result.data?.available === true;
+        const reason = available ? null : !stillAllowed ? 'capture_unavailable' :
+          !responseCompatible ? result?.ok === true ? 'extension_mismatch' : 'extension_unavailable'
+            : result.data?.reason || 'backend_unavailable';
+        if (reason === 'extension_mismatch' || reason === 'extension_unavailable') reportCompatibilityProblem();
+        window.postMessage({marker, phase: 'backend_preflight_result', requestId: event.data.requestId,
+          protocolVersion, available, reason}, location.origin);
+      }).catch(() => {
+        reportCompatibilityProblem();
+        window.postMessage({marker, phase: 'backend_preflight_result', requestId: event.data.requestId,
+          protocolVersion, available: false, reason: 'extension_unavailable'}, location.origin);
+      });
+      return;
+    }
     if (event.data.phase === 'network_blocked') {
-      const reason = event.data.reason === 'expired' ? 'expired' : 'missing';
+      const reason = ['expired', 'backend_unavailable', 'capture_unavailable',
+        'extension_mismatch', 'extension_unavailable'].includes(event.data.reason)
+        ? event.data.reason : 'missing';
       chrome.runtime.sendMessage({type: 'prompt_blocked', method: 'network', reason}).catch(() => {});
+      if (reason === 'backend_unavailable') {
+        showNotice('Envio impedido: o backend de governança não respondeu. O prompt continua no compositor; tente novamente quando o serviço voltar.', true);
+        return;
+      }
+      if (reason === 'capture_unavailable') {
+        showNotice('Envio impedido: captura ou atribuição da extensão está pausada. Verifique o login e a atribuição desta instalação.', true);
+        return;
+      }
+      if (reason === 'extension_mismatch' || reason === 'extension_unavailable') {
+        reportCompatibilityProblem();
+        return;
+      }
       // shortcut: use the current composer for any rejected conversation POST; narrow if other automatic sends need separate treatment.
       const text = editorText(editor()).trim();
       if (text) {
@@ -225,10 +294,14 @@
     }
     if (event.data.phase === 'pong') {
       verification++;
+      mainCompatible = event.data.protocolVersion === protocolVersion;
+      policySynchronized = workerCompatible && mainCompatible;
+      if (policySynchronized) compatibilityNoticeShown = false;
+      else reportCompatibilityProblem();
       chrome.runtime.sendMessage({type: 'blocker_health', mainActive: true,
         blocked: manualBlocked !== false, synchronized: policySynchronized,
         machineAssigned, authExpired: authExpiresAt !== null && Date.now() >= authExpiresAt,
-        mainBlocked: event.data.blocked === true}).catch(() => {});
+        mainBlocked: event.data.blocked === true, protocolCompatible: policySynchronized}).catch(() => {});
     }
   });
 })();

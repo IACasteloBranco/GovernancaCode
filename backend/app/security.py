@@ -3,12 +3,13 @@ from typing import Annotated
 
 import cachecontrol
 import requests
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.auth.exceptions import TransportError
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 
+from .db import connect, record_privacy_audit
 from .settings import Settings, get_settings
 
 _bearer = HTTPBearer(auto_error=False)
@@ -67,11 +68,68 @@ def require_operator_token(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> str | None:
     supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
+    return _operator_department(supplied, settings)
+
+
+def _operator_department(supplied: str, settings: Settings) -> str | None:
     if settings.app_env.lower() == "lab":
         claims = verify_google_token(supplied, settings)
-        if not settings.google_operator_sub or not settings.pilot_department_code or claims["sub"] != settings.google_operator_sub:
-            raise HTTPException(status_code=403, detail="Operator access denied")
-        return settings.pilot_department_code
+        return dashboard_operator_department(claims, settings)
     expected = settings.operator_read_token.get_secret_value() if settings.operator_read_token else None
     _require_token(supplied, expected, "Invalid or missing operator token")
     return None
+
+
+def dashboard_operator_department(claims: dict, settings: Settings) -> str | None:
+    if not settings.pilot_department_code or not settings.allows_content_viewer(claims["sub"]):
+        raise HTTPException(status_code=403, detail="Operator access denied")
+    return None if settings.pilot_department_code == "*" else settings.pilot_department_code
+
+
+def _content_viewer(supplied: str, settings: Settings) -> dict:
+    if settings.app_env.lower() == "lab":
+        claims = verify_google_token(supplied, settings)
+        department_code = dashboard_operator_department(claims, settings)
+        return {"actor_sub": claims["sub"], "department_code": department_code}
+    expected = settings.operator_read_token.get_secret_value() if settings.operator_read_token else None
+    _require_token(supplied, expected, "Invalid or missing operator token")
+    return {"actor_sub": "local-operator-token", "department_code": None}
+
+
+def require_content_viewer(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
+    if not supplied:
+        supplied = request.cookies.get("analytics_session", "")
+    if settings.app_env.lower() == "lab":
+        claims = verify_google_token(supplied, settings)
+        if not settings.allows_content_viewer(claims["sub"]):
+            if (request.url.path == "/v1/admin/analytics/interactions" or
+                    request.url.path.startswith("/v1/interactions/")):
+                action = ("GET /v1/admin/analytics/interactions" if
+                          request.url.path == "/v1/admin/analytics/interactions" else
+                          "GET /v1/interactions/{interaction_id}")
+                with connect(settings) as db:
+                    record_privacy_audit(db, "content_read_denied", claims["sub"], action, 0)
+            raise HTTPException(status_code=403, detail="Operator access denied")
+        department_code = dashboard_operator_department(claims, settings)
+        return {"actor_sub": claims["sub"], "department_code": department_code}
+    return _content_viewer(supplied, settings)
+
+
+def require_analytics_operator(
+    viewer: Annotated[dict, Depends(require_content_viewer)],
+) -> str | None:
+    return viewer["department_code"]
+
+
+def require_dashboard_session(request: Request, settings: Annotated[Settings, Depends(get_settings)]) -> dict:
+    session_token = request.cookies.get("analytics_session", "")
+    if settings.app_env.lower() != "lab" or not session_token:
+        raise HTTPException(status_code=401, detail="Dashboard session required")
+    claims = verify_google_token(session_token, settings)
+    dashboard_operator_department(claims, settings)
+    return claims

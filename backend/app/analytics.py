@@ -1,10 +1,11 @@
 from collections import defaultdict
 from datetime import datetime, timezone
+import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from .db import connect, iso
-from .security import require_operator_token
+from .db import connect, iso, record_privacy_audit
+from .security import require_analytics_operator, require_content_viewer
 from .settings import Settings, get_settings
 
 
@@ -53,16 +54,18 @@ def _event_count(db, table: str, department_code: str | None,
         clauses.append("received_at < ?")
         values.append(iso(end))
     where = " AND ".join(clauses) or "1 = 1"
-    return db.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", values).fetchone()[0]
+    return db.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE {where}", values).fetchone()["count"]
 
 
 @router.get("/summary")
 def analytics_summary(
+    response: Response,
     start: datetime | None = Query(default=None, alias="from"),
     end: datetime | None = Query(default=None, alias="to"),
-    department_code: str | None = Depends(require_operator_token),
+    department_code: str | None = Depends(require_analytics_operator),
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    response.headers["Cache-Control"] = "no-store"
     start, end = _normalize_period(start, end)
     where, values = _interaction_filter(department_code, start, end)
     with connect(settings) as db:
@@ -123,4 +126,70 @@ def analytics_summary(
         "totals": totals,
         "by_department": by_department,
         "by_employee": employees,
+    }
+
+
+@router.get("/interactions")
+def search_interactions(
+    response: Response,
+    department_code: str | None = Query(default=None, min_length=1, max_length=128),
+    employee_id: str | None = Query(default=None, min_length=1, max_length=128),
+    start: datetime | None = Query(default=None, alias="from"),
+    end: datetime | None = Query(default=None, alias="to"),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    viewer: dict = Depends(require_content_viewer),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    scoped_department = viewer["department_code"]
+    start, end = _normalize_period(start, end)
+    clauses = ["i.department_code = ?"] if scoped_department else []
+    values: list[str | int] = [scoped_department] if scoped_department else []
+    for column, value in (("i.department_code", department_code), ("i.employee_id", employee_id)):
+        if value is not None:
+            clauses.append(f"{column} = ?")
+            values.append(value)
+    if start is not None:
+        clauses.append("i.received_at >= ?")
+        values.append(iso(start))
+    if end is not None:
+        clauses.append("i.received_at < ?")
+        values.append(iso(end))
+    where = " AND ".join(clauses) or "1 = 1"
+    with connect(settings) as db:
+        rows = db.execute(
+            f"""SELECT i.interaction_id, i.employee_id,
+                       COALESCE(i.attributed_person, e.person_name, 'Não atribuído') AS person_name,
+                       i.department_code, COALESCE(d.department_name, i.department_code, 'Não atribuído') AS department_name,
+                       i.platform, i.status, i.received_at, i.prompt_json,
+                       (SELECT r.text FROM responses r WHERE r.interaction_id = i.interaction_id
+                        ORDER BY r.received_at DESC LIMIT 1) AS response_text
+                FROM interactions i
+                LEFT JOIN employees e ON e.employee_id = i.employee_id
+                LEFT JOIN departments d ON d.department_code = i.department_code
+                WHERE {where}
+                ORDER BY i.received_at DESC, i.interaction_id
+                LIMIT ? OFFSET ?""",
+            [*values, limit, offset],
+        ).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS count FROM interactions i WHERE {where}", values).fetchone()["count"]
+        record_privacy_audit(db, "content_read", viewer["actor_sub"],
+                             "GET /v1/admin/analytics/interactions", len(rows))
+    return {
+        "items": [{
+            "interaction_id": row["interaction_id"],
+            "employee_id": row["employee_id"],
+            "person_name": row["person_name"],
+            "department_code": row["department_code"],
+            "department_name": row["department_name"],
+            "platform": row["platform"],
+            "status": row["status"],
+            "received_at": row["received_at"],
+            "prompt": json.loads(row["prompt_json"]),
+            "response": row["response_text"],
+        } for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }

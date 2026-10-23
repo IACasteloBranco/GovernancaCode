@@ -26,7 +26,7 @@ O projeto chegou a uma POC integrada que captura prompts, avalia regras locais e
 
 - Criamos uma extensão Manifest V3 para `chatgpt.com` e uma API local com SQLite. O fluxo inicial observa Enter, clique e `submit`, captura o prompt, envia ao service worker e registra a interação na API com um ID. Há popup para configuração e diagnósticos.
 - O backend oferece registro idempotente de interações, associação de snapshots de resposta, consulta por ID, token de laboratório e retenção configurável. O banco local não é um backup completo das conversas.
-- A versão original permanece em [`extension/`](../extension/README.md), atualmente **0.1.11**. Ela continua separada das POCs.
+- A versão original permanece em [`extension/`](../../extension/README.md), atualmente **0.1.11**. Ela continua separada das POCs.
 
 ### 2.2 Testes de captura de respostas pelo DOM
 
@@ -37,7 +37,7 @@ O projeto chegou a uma POC integrada que captura prompts, avalia regras locais e
 
 ### 2.3 Investigação do fluxo de rede
 
-- Para preservar a extensão original, criamos a sonda isolada [`obsolete/extension-network-poc-root-compat/`](../obsolete/extension-network-poc-root-compat/README.md), versão **0.2.4**. Ela roda no contexto `MAIN`, observa metadados e lê uma cópia do stream, sem alterar o fluxo entregue ao ChatGPT.
+- Para preservar a extensão original, criamos a sonda isolada [`obsolete/extension-network-poc-root-compat/`](../../obsolete/extension-network-poc-root-compat/README.md), versão **0.2.4**. Ela roda no contexto `MAIN`, observa metadados e lê uma cópia do stream, sem alterar o fluxo entregue ao ChatGPT.
 - Os testes de 25/09 identificaram `POST /backend-api/:id/conversation` via `fetch`, resposta HTTP 200 com `text/event-stream`. O evento `fetch end` indicava apenas a chegada dos cabeçalhos. Em dois envios, a sonda observou `[DONE]` (`protocolDone=1`), seguido por `AbortError` na cópia do stream. Também observou eventos `delta` e campos estruturais ligados a `content/parts`.
 - Isso estabeleceu um candidato a sinal de fim do protocolo, mas **não** estabeleceu o conteúdo completo nem uma relação determinística `Prompt N → Response N`. A **POC A (Mirror Mode)** de reconstrução e comparação com o DOM ficou pendente. A **POC B (Buffered Mode)** de retenção/liberação não foi implementada. A investigação de resposta foi pausada por decisão do usuário para priorizar o bloqueio de prompts.
 - A sonda limita seus diagnósticos a metadados locais; não grava cookies, headers de autorização, token, texto de prompt ou resposta.
@@ -45,8 +45,8 @@ O projeto chegou a uma POC integrada que captura prompts, avalia regras locais e
 ### 2.4 Bloqueio preventivo e regras
 
 - Uma POC separada comprovou o bloqueio antes de a requisição `conversation` seguir ao ChatGPT. Houve um teste inicial em que o popup mostrava bloqueio, mas a requisição ainda chegava; após ajuste, o usuário confirmou que o envio passou a ser efetivamente impedido.
-- Consolidamos captura e bloqueio em [`extension-prompt-block-poc/`](../extension-prompt-block-poc/README.md), versão **0.5.0**, mantendo as outras versões. O texto é avaliado local e sincronicamente antes do envio por Enter, clique ou `submit`. O aviso na página e o popup mostram ação e regra sem reproduzir o dado detectado. A camada `MAIN` exige uma autorização curta de uso único para cada `POST .../conversation` permitido.
-- A política é derivada de [`politica_bloqueio_prompts_v0_1.md`](../politica_bloqueio_prompts_v0_1.md). Para o piloto, o ChatGPT Web foi classificado como **não aprovado para dados de clientes**. As decisões são `ALLOW`, `WARN`, `REVIEW` e `BLOCK`; `REVIEW` fica retido porque não há fluxo de aprovação humana.
+- Consolidamos captura e bloqueio em [`extension-prompt-block-poc/`](../../obsolete/Extensão/extension-prompt-block-poc/README.md), versão **0.5.0**, mantendo as outras versões. O texto é avaliado local e sincronicamente antes do envio por Enter, clique ou `submit`. O aviso na página e o popup mostram ação e regra sem reproduzir o dado detectado. A camada `MAIN` exige uma autorização curta de uso único para cada `POST .../conversation` permitido.
+- A política é derivada de [`politica_bloqueio_prompts_v0_1.md`](../../policies/politica_bloqueio_prompts_v0_1.md). Para o piloto, o ChatGPT Web foi classificado como **não aprovado para dados de clientes**. As decisões são `ALLOW`, `WARN`, `REVIEW` e `BLOCK`; `REVIEW` fica retido porque não há fluxo de aprovação humana.
 - As regras R01–R09 cobrem chaves privadas, credenciais, códigos de recuperação, CPF, tabelas de dados pessoais, combinação de identificador com categoria sensível, marcadores de sigilo e certos conjuntos de dados fiscais. A exceção experimental da R05 bloqueia **qualquer CPF válido** nesse destino, com ou sem pontuação. A expressão encontra candidatos e o algoritmo valida os dígitos; números inválidos e sequências repetidas não acionam R05. O valor encontrado não entra no diagnóstico do bloqueio.
 - Também há controle manual de **Bloquear todos os envios**. O texto bloqueado permanece no editor para correção.
 
@@ -54,7 +54,7 @@ O projeto chegou a uma POC integrada que captura prompts, avalia regras locais e
 
 - Como a conta do ChatGPT é compartilhada por departamento, optamos por atribuir cada instalação da extensão a uma pessoa e ao **ID estável** de seu projeto, em vez de usar o e-mail compartilhado como identidade individual.
 - A versão 0.5.0 gera um UUID e uma chave ECDSA P-256 por instalação/perfil do Chrome. A extensão assina eventos enviados à API; o backend confere assinatura, timestamp, nonce e hash do corpo, rejeita repetição e exige que o projeto do evento corresponda ao vínculo administrativo.
-- O operador cadastra a chave pública, confere sua impressão digital e atribui nome e ID de projeto pelo comando [`assign_machine.py`](../backend/assign_machine.py). O projeto de exemplo informado foi `g-p-6abacc4edb1c81918be5e01d0038640a`, denominado **EDUARDO**. A comparação usa o ID da URL, pois o nome visível pode mudar.
+- O operador cadastra a chave pública, confere sua impressão digital e atribui nome e ID de projeto pelo comando [`assign_machine.py`](../../backend/assign_machine.py). O projeto de exemplo informado foi `g-p-6abacc4edb1c81918be5e01d0038640a`, denominado **EDUARDO**. A comparação usa o ID da URL, pois o nome visível pode mudar.
 - A chave privada fica em `chrome.storage.local`. Esse mecanismo identifica uma **instalação/perfil**, não comprova a identidade física de quem digitou; perfis compartilhados ou copiados reduzem essa garantia. A atribuição atualizada no backend pode demorar a refletir em abas antigas até recarregá-las.
 - O banco de laboratório consultado neste relatório ainda tem esquema anterior à versão 0.5.0: **não contém a tabela `machines`**. Assim, não há registro local que demonstre matrícula ou atribuição real já concluída. O backend atualizado precisa ser iniciado para migrar o banco e o fluxo deve ser testado no Chrome.
 

@@ -59,8 +59,32 @@ def test_health_is_public_and_does_not_expose_internal_configuration(client):
     result = client.get("/health")
 
     assert result.status_code == 200
-    assert result.json() == {"status": "ok", "schema_version": "0.8"}
+    assert result.json() == {"status": "ok", "schema_version": "0.9"}
     assert client.get("/docs").status_code == 404
+
+
+def test_analytics_dashboard_is_served_without_caching_or_exposing_raw_content(client):
+    response = client.get("/analytics/")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert 'id="filters"' in response.text
+    assert 'id="departments"' in response.text
+    assert 'id="employees"' in response.text
+    assert "prompt_json" not in response.text
+    assert OPERATOR_TOKEN not in response.text
+    assert 'id="operator-token" type="password"' in response.text
+
+
+def test_dashboard_logout_cookie_matches_local_http(client):
+    response = client.post("/v1/auth/dashboard/logout")
+
+    assert response.status_code == 204
+    cookie = next(value for value in response.headers.get_list("set-cookie")
+                  if value.startswith("analytics_session="))
+    assert "secure" not in cookie.lower()
+    assert "httponly" in cookie.lower()
 
 
 def test_capture_and_operator_scopes_are_separate(client):
@@ -358,3 +382,28 @@ def test_analytics_summary_is_operator_only_and_contains_no_content(client):
         "/v1/admin/analytics/summary?from=2026-10-18T00:00:00&to=2026-10-19T00:00:00Z",
         headers=OPERATOR_AUTH,
     ).status_code == 422
+
+
+def test_analytics_interaction_search_is_scoped_filtered_and_paginated(client):
+    identifiers = [
+        client.post("/v1/interactions", json=interaction_payload(prompt=f"Synthetic search {n}"), headers=AUTH).json()["interaction_id"]
+        for n in range(3)
+    ]
+    with connect(get_settings()) as db:
+        for n, identifier in enumerate(identifiers):
+            db.execute(
+                "UPDATE interactions SET attributed_person = ?, employee_id = ?, department_code = ? WHERE interaction_id = ?",
+                ("Pessoa Sintética", "func-001" if n < 2 else "func-002", "dep-a" if n < 2 else "dep-b", identifier),
+            )
+
+    assert client.get("/v1/admin/analytics/interactions", headers=AUTH).status_code == 401
+    first = client.get("/v1/admin/analytics/interactions?department_code=dep-a&employee_id=func-001&limit=1", headers=OPERATOR_AUTH)
+    assert first.status_code == 200
+    assert first.headers["Cache-Control"] == "no-store"
+    assert first.json()["total"] == 2
+    assert len(first.json()["items"]) == 1
+    assert first.json()["items"][0]["prompt"]["text"].startswith("Synthetic search")
+    second = client.get("/v1/admin/analytics/interactions?department_code=dep-a&employee_id=func-001&limit=1&offset=1", headers=OPERATOR_AUTH)
+    assert second.status_code == 200
+    assert second.json()["items"][0]["interaction_id"] != first.json()["items"][0]["interaction_id"]
+    assert client.get("/v1/admin/analytics/interactions?limit=101", headers=OPERATOR_AUTH).status_code == 422

@@ -3,9 +3,9 @@
 **Versão:** 0.1  
 **Data:** 23/09/2026  
 **Status:** plano inicial preservado como histórico; a versão integrada 0.5.0 foi implementada e aguarda validação ponta a ponta no navegador.  
-**Base:** [Especificação da POC](../POC_EXTENSAO_BACKEND_GOVERNANCA_IA_v0.1.md) e [plano do backend](PLANO_IMPLANTACAO_BACKEND_POC_v0.1.md).
+**Base:** [Especificação da POC](../reference/POC_EXTENSAO_BACKEND_GOVERNANCA_IA_v0.1.md) e [plano do backend](PLANO_IMPLANTACAO_BACKEND_POC_v0.1.md).
 
-Para o fluxo atual de cadastro, atribuição e captura, consulte o [estado atual](ESTADO_ATUAL_2026-10-01.md) e o [guia da extensão integrada](../extension/README.md).
+Para o fluxo atual de cadastro, atribuição e captura, consulte o [estado atual](../archive/ESTADO_ATUAL_2026-10-01.md) e o [guia da extensão integrada](../../extension/README.md).
 
 ## 1. Objetivo
 
@@ -250,4 +250,4 @@ Depois do aceite, decidir sobre fila offline, autenticação individual, ordena�
 
 A pasta `extension/` foi criada e o primeiro fluxo sintético de prompt e resposta foi confirmado localmente em 24/09/2026. A versão 0.1.4 do adapter precisa agora ser medida nas rotas de envio, contexto, respostas e falhas previstas acima.
 
-A execução, as evidências e os critérios de decisão dessa próxima etapa estão no [roteiro de validação local](ROTEIRO_VALIDACAO_LOCAL_POC_v0.1.md). O resultado de uma interação não encerra o aceite da extensão.
+A execução, as evidências e os critérios de decisão dessa próxima etapa estão no [roteiro de validação local](../guide/ROTEIRO_VALIDACAO_LOCAL_POC_v0.1.md). O resultado de uma interação não encerra o aceite da extensão.

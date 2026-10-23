@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const files = ['policy-engine.js', 'policy-messages.js', 'blocker-bridge.js'];
 const source = (await Promise.all(files.map(name => readFile(new URL(`../src/content/${name}`, import.meta.url), 'utf8')))).join('\n');
+const protocolVersion = 1;
 
 test('re-evaluates policy and resumes the menu click only after restoring the interaction', async () => {
   const listeners = new Map();
@@ -35,7 +36,10 @@ test('re-evaluates policy and resumes the menu click only after restoring the in
   const document = {documentElement: root, body: root, addEventListener: () => {},
     querySelectorAll: () => [], querySelector: () => null,
     createElement: () => ({setAttribute: () => {}, style: {}, remove: () => {}})};
-  const window = {addEventListener: (type, callback) => listeners.set(type, callback), postMessage: () => {}};
+  const window = {addEventListener: (type, callback) => listeners.set(type, callback), postMessage: message => {
+    if (message.phase === 'ping') listeners.get('message')?.({source: window, origin: 'https://chatgpt.com',
+      data: {marker: 'governanca-ai-prompt-block-v1', phase: 'pong', protocolVersion, blocked: true}});
+  }};
   const port = {onMessage: {addListener: callback => { policy = callback; }},
     onDisconnect: {addListener: () => {}}, postMessage: () => {}};
   const chrome = {runtime: {connect: () => port, sendMessage: async message => {decisions.push(message);}}};
@@ -44,7 +48,7 @@ test('re-evaluates policy and resumes the menu click only after restoring the in
       regenerated.push([text, key]); return Promise.resolve(true);
     }}};
   vm.runInNewContext(source, context);
-  policy({type: 'block_policy', blocked: false, machineAssigned: true});
+  policy({type: 'block_policy', blocked: false, machineAssigned: true, protocolVersion, protocolCompatible: true});
   const open = () => listeners.get('click')(event({closest: selector => selector === 'button' ? opener : null}));
   const select = () => {
     const click = event({closest: selector => selector === '[role="menuitem"]' ? menuItem : null});

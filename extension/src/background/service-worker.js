@@ -3,8 +3,12 @@ import {CONFIG} from './config.js';
 const CLOUD = CONFIG.mode !== 'local';
 const API = CLOUD ? CONFIG.apiUrl.replace(/\/$/, '') : 'http://127.0.0.1:8000';
 const CHATGPT_ORIGIN = 'https://chatgpt.com';
+const BLOCKER_PROTOCOL_VERSION = 1; // Bump only for incompatible blocker-message changes.
+const PRIVACY_NOTICE_VERSION = '2026-10-22.1';
+const LOCAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const policyPorts = new Set();
-let turnLinkWrites = Promise.resolve();
+const policyPortProtocols = new WeakMap();
+let localHistoryWrites = Promise.resolve();
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
   await chrome.storage.session.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
@@ -13,6 +17,8 @@ const ready = (async () => {
   if (mainApiToken) await chrome.storage.session.remove('mainApiToken');
   const {installationId} = await chrome.storage.local.get('installationId');
   if (!installationId) await chrome.storage.local.set({installationId: crypto.randomUUID()});
+  await chrome.alarms?.create?.('privacy-retention-cleanup', {periodInMinutes: 24 * 60});
+  await pruneLocalHistory();
 })();
 
 const hex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
@@ -37,8 +43,9 @@ async function credentials() {
 }
 
 async function captureReadiness() {
-  const [{enabled}, {machineAssignment}] = await Promise.all([
-    chrome.storage.local.get('enabled'), chrome.storage.session.get('machineAssignment')]);
+  const [{enabled, privacyAcceptance}, {machineAssignment, googleSession}] = await Promise.all([
+    chrome.storage.local.get(['enabled', 'privacyAcceptance']),
+    chrome.storage.session.get(['machineAssignment', 'googleSession'])]);
   const configured = !CLOUD || cloudConfigured();
   const authSessionValid = Boolean(await credentials());
   const keyMatches = machineAssignment?.key_matches === true;
@@ -46,10 +53,13 @@ async function captureReadiness() {
   const machineAssignmentComplete = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
     machineAssignment?.department_code && keyMatches && subjectBound);
   const captureEnabled = enabled === true;
+  const subject = CLOUD ? googleSession?.sub : machineAssignment?.employee_id;
+  const privacyNoticeAccepted = Boolean(subject && privacyAcceptance?.version === PRIVACY_NOTICE_VERSION &&
+    privacyAcceptance.subject === subject && Number.isFinite(Date.parse(privacyAcceptance.accepted_at)));
   return {cloud_configured: configured, capture_enabled: captureEnabled,
     auth_session_valid: authSessionValid, machine_assignment_complete: machineAssignmentComplete,
-    key_matches: keyMatches, subject_bound: subjectBound,
-    capture_allowed: configured && captureEnabled && authSessionValid && machineAssignmentComplete};
+    key_matches: keyMatches, subject_bound: subjectBound, privacy_notice_accepted: privacyNoticeAccepted,
+    capture_allowed: configured && captureEnabled && authSessionValid && machineAssignmentComplete && privacyNoticeAccepted};
 }
 
 async function captureAllowed() {
@@ -194,13 +204,17 @@ async function broadcastPolicy() {
   const {googleSession} = CLOUD ? await chrome.storage.session.get('googleSession') : {};
   for (const port of policyPorts) {
     try { port.postMessage({type: 'block_policy', blocked: false,
-      machineAssigned: allowed, authExpiresAt: CLOUD ? googleSession?.exp * 1000 || 0 : null}); }
+      protocolVersion: BLOCKER_PROTOCOL_VERSION,
+      protocolCompatible: policyPortProtocols.get(port) === BLOCKER_PROTOCOL_VERSION,
+      machineAssigned: allowed && policyPortProtocols.get(port) === BLOCKER_PROTOCOL_VERSION,
+      authExpiresAt: CLOUD ? googleSession?.exp * 1000 || 0 : null}); }
     catch { policyPorts.delete(port); }
   }
 }
 
 async function sendToApi(path, options = {}) {
   await ready;
+  const {timeoutMs = 10_000, ...requestOptions} = options;
   if (CLOUD && !cloudConfigured()) throw new Error('Configuração OAuth da nuvem incompleta.');
   const identity = await credentials();
   if (CLOUD && !identity && path !== '/health') {
@@ -210,13 +224,14 @@ async function sendToApi(path, options = {}) {
   const method = options.method || 'GET';
   const bodyText = options.body || '';
   const signed = (method === 'GET' && /^\/v1\/machines\/[0-9a-f-]{36}$/i.test(path)) ||
+    (method === 'POST' && /^\/v1\/machines\/[0-9a-f-]{36}\/assignment-request$/i.test(path)) ||
     (method === 'POST' && (path === '/v1/stream-captures' ||
     path === '/v1/artifact-metadata' || path === '/v1/interactions' ||
     /^\/v1\/interactions\/[0-9a-f-]{36}\/response$/i.test(path)));
   const signedHeaders = signed ? await machineHeaders(path, method, bodyText) : {};
   const response = await fetch(`${API}${path}`, {
-    ...options,
-    signal: AbortSignal.timeout(10_000),
+    ...requestOptions,
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {'Content-Type': 'application/json', ...(identity ? {Authorization: `Bearer ${identity.id_token}`} : {}),
       ...signedHeaders, ...options.headers}
   });
@@ -229,6 +244,7 @@ async function sendToApi(path, options = {}) {
 
 async function status() {
   await ready;
+  await pruneLocalHistory();
   const config = await chrome.storage.local.get(['enabled', 'lastCaptures', 'lastArtifacts', 'captureDiagnostics']);
   const {installationId} = await chrome.storage.local.get('installationId');
   let identity = await credentials();
@@ -249,7 +265,11 @@ async function status() {
   const fullyAssigned = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
     machineAssignment?.department_code && machineAssignment?.key_matches === true &&
     (!CLOUD || machineAssignment.subject_bound === true));
-  if (config.enabled === true && (!identity || !fullyAssigned)) {
+  const {privacyAcceptance = null} = await chrome.storage.local.get('privacyAcceptance');
+  const privacySubject = CLOUD ? identity?.sub : machineAssignment?.employee_id;
+  const privacyAccepted = Boolean(privacySubject && privacyAcceptance?.version === PRIVACY_NOTICE_VERSION &&
+    privacyAcceptance.subject === privacySubject && Number.isFinite(Date.parse(privacyAcceptance.accepted_at)));
+  if (config.enabled === true && (!identity || !fullyAssigned || !privacyAccepted)) {
     config.enabled = false;
     await chrome.storage.local.set({enabled: false});
     await updateProbeConfig(false);
@@ -260,22 +280,53 @@ async function status() {
     configured: CLOUD ? cloudConfigured() : Boolean(identity), cloud: CLOUD,
     email: CLOUD ? identity?.email || null : null, sub: CLOUD ? identity?.sub || null : null,
     authProblem, installationId, machineAssignment, machineInfo,
+    privacyNotice: {version: PRIVACY_NOTICE_VERSION, accepted: privacyAccepted,
+      acceptedAt: privacyAccepted ? privacyAcceptance.accepted_at : null},
     lastCaptures: config.lastCaptures || [],
     lastArtifacts: config.lastArtifacts || [], captureDiagnostics: config.captureDiagnostics || []};
 }
 
 async function recordDiagnostic(stage, details = {}) {
-  const {captureDiagnostics = []} = await chrome.storage.local.get('captureDiagnostics');
+  if (!await captureAllowed()) return;
   const diagnostic = {stage, at: new Date().toISOString(), ...details};
-  if (stage === 'blocker_health') {
-    const retained = captureDiagnostics.filter(item => item.stage !== 'blocker_health').slice(-29);
-    retained.push(diagnostic);
-    await chrome.storage.local.set({captureDiagnostics: retained});
-    return;
-  }
-  captureDiagnostics.push(diagnostic);
-  await chrome.storage.local.set({captureDiagnostics: captureDiagnostics.slice(-30)});
+  await updateLocalHistory('captureDiagnostics', entries => {
+    const retained = stage === 'blocker_health' ? entries.filter(item => item.stage !== 'blocker_health') : entries;
+    return [...retained, diagnostic].slice(-30);
+  });
 }
+
+function historyTimestamp(key, item) {
+  const value = key === 'captureDiagnostics' ? item?.at :
+    key === 'turnLinks' ? item?.[3] : item?.stored_at || item?.observed_at;
+  const timestamp = Date.parse(value || '');
+  const now = Date.now();
+  return Number.isFinite(timestamp) && timestamp <= now + 5 * 60 * 1000 && timestamp > now - LOCAL_RETENTION_MS;
+}
+
+async function updateLocalHistory(key, update) {
+  const operation = localHistoryWrites.then(async () => {
+    const {[key]: stored} = await chrome.storage.local.get(key);
+    const hadValue = stored !== undefined;
+    const entries = Array.isArray(stored) ? stored.filter(item => historyTimestamp(key, item)) : [];
+    const result = update(entries);
+    if (!hadValue && result.length === 0) return result;
+    await chrome.storage.local.set({[key]: result});
+    return result;
+  });
+  localHistoryWrites = operation.catch(() => {});
+  return operation;
+}
+
+async function pruneLocalHistory() {
+  await Promise.all(['lastCaptures', 'lastArtifacts', 'captureDiagnostics', 'turnLinks']
+    .map(key => updateLocalHistory(key, entries => key === 'turnLinks' ? entries.filter(item =>
+      Array.isArray(item) && item.length === 4 && typeof item[0] === 'string' &&
+      /^[0-9a-f-]{36}$/i.test(item[1] || '') && /^[0-9a-f]{64}$/i.test(item[2] || '')) : entries)));
+}
+
+chrome.alarms?.onAlarm?.addListener(alarm => {
+  if (alarm.name === 'privacy-retention-cleanup') pruneLocalHistory().catch(() => {});
+});
 
 function turnLinkKey(conversationUrl, turnKey) {
   try {
@@ -288,16 +339,8 @@ function turnLinkKey(conversationUrl, turnKey) {
 }
 
 async function rememberTurnLink(key, interactionId, promptHash) {
-  const write = turnLinkWrites.then(async () => {
-    const {turnLinks = []} = await chrome.storage.local.get('turnLinks');
-    const entries = Array.isArray(turnLinks) ? turnLinks.filter(item =>
-      Array.isArray(item) && typeof item[0] === 'string' && /^[0-9a-f-]{36}$/i.test(item[1] || '') &&
-      /^[0-9a-f]{64}$/i.test(item[2] || '') && item[0] !== key) : [];
-    entries.push([key, interactionId, promptHash]);
-    await chrome.storage.local.set({turnLinks: entries.slice(-500)});
-  });
-  turnLinkWrites = write.catch(() => {});
-  await write;
+  await updateLocalHistory('turnLinks', entries => [...entries.filter(item => item[0] !== key),
+    [key, interactionId, promptHash, new Date().toISOString()]].slice(-500));
 }
 
 async function updateProbeConfig(enabled) {
@@ -314,6 +357,29 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     const page = isChatPage(sender);
 
     if (popup && message.type === 'status') return status();
+    if (popup && message.type === 'delete_local_data') {
+      await chrome.storage.local.clear();
+      await chrome.storage.session.clear();
+      await chrome.storage.local.set({installationId: crypto.randomUUID()});
+      await broadcastPolicy();
+      await updateProbeConfig(false);
+      return {deleted: true};
+    }
+    if (popup && message.type === 'accept_privacy_notice') {
+      if (message.version !== PRIVACY_NOTICE_VERSION) throw new Error('O aviso mudou. Atualize a extensão e leia a versão atual.');
+      const [{googleSession}, {machineAssignment}] = await Promise.all([
+        chrome.storage.session.get(['googleSession']), chrome.storage.session.get(['machineAssignment'])]);
+      const subject = CLOUD ? googleSession?.sub : machineAssignment?.employee_id;
+      if (!subject) throw new Error('Entre na conta corporativa e conclua a atribuição antes de confirmar ciência.');
+      const {privacyAcceptance} = await chrome.storage.local.get('privacyAcceptance');
+      if (privacyAcceptance?.version !== PRIVACY_NOTICE_VERSION || privacyAcceptance.subject !== subject ||
+          !Number.isFinite(Date.parse(privacyAcceptance.accepted_at))) {
+        await chrome.storage.local.set({privacyAcceptance: {
+          version: PRIVACY_NOTICE_VERSION, subject, accepted_at: new Date().toISOString()
+        }, enabled: false});
+      }
+      return {accepted: true};
+    }
     if (popup && message.type === 'login') {
       if (!CLOUD) throw new Error('Login Google disponível apenas no modo nuvem.');
       const account = await googleLogin();
@@ -336,6 +402,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (suppliedToken) await chrome.storage.session.set({captureApiToken: suppliedToken});
       let enableCapture = message.enabled === true;
       if (enableCapture) {
+        if (!(await captureReadiness()).privacy_notice_accepted)
+          throw new Error('Leia e confirme ciência do aviso de privacidade antes de ativar a captura.');
         if (CLOUD && !await credentials()) throw new Error('Entre com sua conta Google antes de ativar a captura.');
         const assignment = await registerAndLoadMachine();
         if (!assignment.person_name || !assignment.employee_id || !assignment.department_code || assignment.key_matches !== true) {
@@ -360,20 +428,43 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       await broadcastPolicy();
       return assignment;
     }
+    if (popup && message.type === 'machine_assignment_request') {
+      const employeeId = typeof message.employeeId === 'string' ? message.employeeId.trim() : '';
+      if (!/^[A-Za-z0-9._@:-]{1,128}$/.test(employeeId)) throw new Error('Informe um código de colaborador válido.');
+      const machine = await registerAndLoadMachine();
+      if (machine.person_name) throw new Error('Esta instalação já está atribuída.');
+      const {installationId} = await chrome.storage.local.get('installationId');
+      return sendToApi(`/v1/machines/${installationId}/assignment-request`, {
+        method: 'POST', body: JSON.stringify({employee_id: employeeId})});
+    }
     if (popup && message.type === 'health') return sendToApi('/health');
 
     if (page && message.type === 'probe_config') {
       return {enabled: await captureAllowed()};
     }
 
+    if (page && message.type === 'backend_preflight') {
+      if (message.protocolVersion !== BLOCKER_PROTOCOL_VERSION)
+        return {protocolVersion: BLOCKER_PROTOCOL_VERSION, available: false, reason: 'extension_mismatch'};
+      if (!await captureAllowed())
+        return {protocolVersion: BLOCKER_PROTOCOL_VERSION, available: false, reason: 'capture_unavailable'};
+      try {
+        const health = await sendToApi('/health', {timeoutMs: 5_000, cache: 'no-store'});
+        if (health?.status !== 'ok')
+          return {protocolVersion: BLOCKER_PROTOCOL_VERSION, available: false, reason: 'backend_unavailable'};
+        return await captureAllowed()
+          ? {protocolVersion: BLOCKER_PROTOCOL_VERSION, available: true, reason: null}
+          : {protocolVersion: BLOCKER_PROTOCOL_VERSION, available: false, reason: 'capture_unavailable'};
+      } catch { return {protocolVersion: BLOCKER_PROTOCOL_VERSION, available: false, reason: 'backend_unavailable'}; }
+    }
+
     if (page && ['remember_turn', 'lookup_turn'].includes(message.type)) {
+      if (!await captureAllowed()) throw new Error('Captura pausada na extensão.');
       const key = turnLinkKey(message.conversationUrl, message.turnKey);
       if (!key) throw new Error('Turno invÃ¡lido.');
-      await turnLinkWrites;
       if (message.type === 'lookup_turn') {
-        const {turnLinks = []} = await chrome.storage.local.get('turnLinks');
-        const link = Array.isArray(turnLinks)
-          ? [...turnLinks].reverse().find(item => Array.isArray(item) && item[0] === key) : null;
+        const turnLinks = await updateLocalHistory('turnLinks', entries => entries);
+        const link = [...turnLinks].reverse().find(item => item[0] === key);
         return {interaction_id: link?.[1] || null, prompt_hash: link?.[2] || null};
       }
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(message.interactionId || ''))
@@ -442,11 +533,10 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
           error: String(error?.message || 'Falha na API').slice(0, 180)});
         throw error;
       }
-      const {lastArtifacts = []} = await chrome.storage.local.get('lastArtifacts');
-      lastArtifacts.push({...saved, source: item.source, file_name: item.file_name, mime_type: item.mime_type,
-        size_bytes: item.size_bytes, conversation_context: item.conversation_context || null,
-        size_source: item.size_source || null, observed_at: item.observed_at});
-      await chrome.storage.local.set({lastArtifacts: lastArtifacts.slice(-20)});
+      await updateLocalHistory('lastArtifacts', entries => [...entries, {...saved, source: item.source,
+        file_name: item.file_name, mime_type: item.mime_type, size_bytes: item.size_bytes,
+        conversation_context: item.conversation_context || null, size_source: item.size_source || null,
+        observed_at: item.observed_at, stored_at: new Date().toISOString()}].slice(-20));
       await recordDiagnostic('artifact_metadata_stored', {source: item.source,
         mime_type: item.mime_type, conversation_id: item.conversation_context?.conversation_id || null,
         size_source: item.size_source});
@@ -478,10 +568,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         await recordDiagnostic('api_rejected', {error: String(error?.message || 'Falha na API').slice(0, 180)});
         throw error;
       }
-      const {lastCaptures = []} = await chrome.storage.local.get('lastCaptures');
-      lastCaptures.push({capture_id: item.capture_id, status: saved.status, frames: item.frames, bytes: item.bytes,
-        response_chars: item.response_chars, observed_at: item.observed_at});
-      await chrome.storage.local.set({lastCaptures: lastCaptures.slice(-20)});
+      await updateLocalHistory('lastCaptures', entries => [...entries, {capture_id: item.capture_id,
+        status: saved.status, frames: item.frames, bytes: item.bytes, response_chars: item.response_chars,
+        observed_at: item.observed_at, stored_at: new Date().toISOString()}].slice(-20));
       await recordDiagnostic('sqlite_stored', {capture_status: item.capture_status, frames: item.frames, bytes: item.bytes,
         reader_aborted_after_done: item.reader_aborted_after_done});
       return saved;
@@ -529,18 +618,22 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (page && message.type === 'blocker_health') {
       if (typeof message.mainActive !== 'boolean' || typeof message.blocked !== 'boolean' ||
           typeof message.synchronized !== 'boolean' || typeof message.machineAssigned !== 'boolean' ||
-          typeof message.authExpired !== 'boolean')
+          typeof message.authExpired !== 'boolean' ||
+          (message.protocolCompatible !== undefined && typeof message.protocolCompatible !== 'boolean'))
         throw new Error('Estado do bloqueio inválido.');
       await recordDiagnostic('blocker_health', {main_active: message.mainActive,
         policy_synchronized: message.synchronized, page_capture_allowed: message.machineAssigned,
-        auth_expired: message.authExpired, network_gate_blocked: message.mainBlocked === true,
+        auth_expired: message.authExpired, protocol_compatible: message.protocolCompatible === true,
+        network_gate_blocked: message.mainBlocked === true,
         ...await captureReadiness()});
       return {logged: true};
     }
     if (page && message.type === 'prompt_blocked') {
       if (!['click', 'enter', 'submit', 'network'].includes(message.method)) throw new Error('Método inválido.');
       await recordDiagnostic('prompt_blocked', {method: message.method,
-        reason: ['expired', 'missing'].includes(message.reason) ? message.reason : null});
+        reason: ['expired', 'missing', 'backend_unavailable', 'capture_unavailable',
+          'extension_mismatch', 'extension_unavailable'].includes(message.reason)
+          ? message.reason : null});
       return {blocked: true};
     }
     throw new Error('Origem ou operação inválida.');
@@ -562,10 +655,15 @@ chrome.runtime.onConnect.addListener(port => {
   port.onDisconnect.addListener(() => policyPorts.delete(port));
   port.onMessage.addListener(async message => {
     if (message?.type !== 'block_status') return;
+    policyPortProtocols.set(port, message.protocolVersion);
+    const protocolCompatible = message.protocolVersion === BLOCKER_PROTOCOL_VERSION;
     try {
-      port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false});
+      port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false,
+        protocolVersion: BLOCKER_PROTOCOL_VERSION, protocolCompatible});
+      if (!protocolCompatible) return;
       if (await credentials()) await loadMachineAssignment();
       port.postMessage({type: 'block_policy', blocked: false,
+        protocolVersion: BLOCKER_PROTOCOL_VERSION, protocolCompatible: true,
         machineAssigned: await captureAllowed(), authExpiresAt: CLOUD
           ? (await chrome.storage.session.get('googleSession')).googleSession?.exp * 1000 || 0 : null});
     } catch {
@@ -573,7 +671,8 @@ chrome.runtime.onConnect.addListener(port => {
       await chrome.storage.local.set({enabled: false});
       await broadcastPolicy();
       await updateProbeConfig(false);
-      try { port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false}); } catch { policyPorts.delete(port); }
+      try { port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false,
+        protocolVersion: BLOCKER_PROTOCOL_VERSION, protocolCompatible}); } catch { policyPorts.delete(port); }
     }
   });
 });

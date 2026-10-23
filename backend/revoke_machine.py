@@ -3,7 +3,7 @@
 import argparse
 from uuid import UUID
 
-from app.db import connect, initialize, iso, utc_now
+from app.db import begin_write, connect, initialize, iso, utc_now
 from app.settings import get_settings
 
 
@@ -15,7 +15,7 @@ def main() -> None:
     settings = get_settings()
     initialize(settings)
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "machines")
         row = db.execute("SELECT key_fingerprint, revoked_at FROM machines WHERE installation_id = ?",
                          (str(args.installation_id),)).fetchone()
         if row is None or len(args.fingerprint_prefix) < 16 or not row["key_fingerprint"].startswith(args.fingerprint_prefix.lower()):

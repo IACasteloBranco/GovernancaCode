@@ -4,7 +4,7 @@
 **Referência:** [roteiro de validação local](ROTEIRO_VALIDACAO_LOCAL_POC_v0.1.md).  
 **Objetivo:** verificar se cada uma das 20 tentativas reais de envio produz exatamente um prompt persistido, com texto fiel e ID único. Executar 10 por clique e 10 por Enter, separadamente.
 
-**Atualização operacional de 02/10/2026:** executar este ensaio com `obsolete/Extensão/extension-prompt-block-poc/` e a instalação atribuída a uma pessoa. O projeto da conversa é apenas contexto observado. O [estado atual](ESTADO_ATUAL_2026-10-01.md) descreve o cadastro e a atribuição. O restante do procedimento conserva os marcadores B01/B02 originais.
+**Atualização operacional de 02/10/2026:** executar este ensaio com `obsolete/Extensão/extension-prompt-block-poc/` e a instalação atribuída a uma pessoa. O projeto da conversa é apenas contexto observado. O [estado atual](../archive/ESTADO_ATUAL_2026-10-01.md) descreve o cadastro e a atribuição. O restante do procedimento conserva os marcadores B01/B02 originais.
 
 ## 1. Preparação
 
@@ -12,7 +12,7 @@
 2. Em `chrome://extensions`, confira que a extensão integrada 0.5.0 está carregada. No popup, confira código da instalação, pessoa, prefixo da chave, conta declarada e **Captura: habilitada**. Informe o token e clique **Salvar configuração** quando necessário. Se tiver recarregado a extensão, recarregue também a aba do ChatGPT.
 3. Anote versão do Chrome (`chrome://version`), versão do backend (`0.1.0`, salvo alteração), data e conversa de laboratório usada.
 4. Abra **uma conversa de laboratório já existente** e mantenha nela todos os 20 envios. Não use outras abas do ChatGPT durante B01/B02. Nova conversa e múltiplas abas serão avaliadas em cenários próprios.
-5. Abra o [CSV de evidências](REGISTRO_EVIDENCIAS_POC_v0.1.csv). Prepare 20 linhas com `cenario_id` de `B01-01` a `B01-10` e de `B02-01` a `B02-10`. Deixe os campos de resultado em branco até cada execução.
+5. Abra o [CSV de evidências](../archive/REGISTRO_EVIDENCIAS_POC_v0.1.csv). Prepare 20 linhas com `cenario_id` de `B01-01` a `B01-10` e de `B02-01` a `B02-10`. Deixe os campos de resultado em branco até cada execução.
 6. No PowerShell aberto na pasta `backend`, anote a contagem inicial de interações:
 
    ```powershell

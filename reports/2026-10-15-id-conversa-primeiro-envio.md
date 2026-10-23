@@ -23,7 +23,7 @@ Para reproduzir, execute as suítes da extensão e do backend indicadas abaixo. 
 - `extension/src/content/observer.js`, `extension/src/background/service-worker.js` e `extension/manifest.json`: estado da conversa e versão `0.4.6` do adaptador.
 - `extension/tests/observer-network.test.mjs` e `extension/tests/blocker-manifest.test.mjs`: casos de conversa nova, conversa identificada e versão do pacote.
 - `backend/tests/test_api.py` e `backend/tests/test_machine_identity.py`: persistência de contexto desconhecido e fixtures isoladas do `.env` local.
-- `extension/README.md` e `docs/PLANO_IMPLANTACAO_EXTENSAO_POC_v0.1.md`: limite da análise por conversa.
+- `extension/README.md` e `docs/plans/PLANO_IMPLANTACAO_EXTENSAO_POC_v0.1.md`: limite da análise por conversa.
 - `graphify-out/`: grafo atualizado depois da mudança de código.
 
 ## Verificações
@@ -32,8 +32,12 @@ Para reproduzir, execute as suítes da extensão e do backend indicadas abaixo. 
 | --- | --- |
 | `node --test --test-isolation=none extension/tests/*.test.mjs` | `PASS`: 58 testes. |
 | `.venv/Scripts/python.exe -m pytest -q tests -p no:cacheprovider --basetemp ../.tmp/conversation-id-20261015-all-final` em `backend/` | `PASS`: 19 testes, 1 aviso de depreciação do TestClient. |
-| Envio em chat novo no Chrome após recarregar a extensão | `NOT_TESTED`. |
+| Envio em chat novo no Chrome após recarregar a extensão | `BLOCKED`: no ensaio de 2026-10-15, a tentativa atual marcou `data-governanca-prompt-capture=rejected`; não houve registro correspondente no banco. O último registro de chat novo continuou reportando `adapter_version=0.4.4` e a URL raiz observada. |
 | ID definitivo do primeiro envio disponível para análise por conversa | `FAIL`: permanece ausente no contrato atual. |
+
+## Reteste após atualização informada da extensão
+
+Entrada sintética: `Validação do chat novo V2. Responda somente com OK-CHAT-NOVO-02.`. O texto foi enviado em um chat novo; a resposta da página foi `OK-CHAT-NOVO-02`. A captura do prompt ficou com estado `rejected`, e a consulta somente leitura ao banco não encontrou interação com esse texto. O último registro existente para chat novo tinha `adapter_version=0.4.4` e `conversation.capture_status=observed` com `url=https://chatgpt.com/`, evidência de que a tentativa anterior usou o pacote antigo. Não foi possível confirmar que o Chrome está executando o pacote `0.4.6`; o ensaio da implementação atual permanece bloqueado até essa confirmação e um novo envio sintético.
 
 `graphify update .` concluiu a atualização do grafo. O comando avisou que não conseguiu ler algumas pastas temporárias de testes; elas não contêm as fontes alteradas.
 

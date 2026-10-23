@@ -4,7 +4,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from .db import connect, iso, utc_now
+from .db import begin_write, connect, iso, utc_now
 from .settings import Settings
 
 
@@ -150,7 +150,7 @@ def load_roster(path: Path) -> Roster:
 def apply_roster(roster: Roster, settings: Settings) -> None:
     now = iso(utc_now())
     with connect(settings) as db:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db, "departments", "employees")
         for department in roster.departments:
             db.execute(
                 """INSERT INTO departments(department_code, department_name, active, created_at, updated_at)

@@ -5,3 +5,4 @@ cryptography>=43,<51
 google-auth>=2.35,<3
 CacheControl>=0.14,<1
 requests>=2.31,<3
+psycopg[binary]>=3.2,<4

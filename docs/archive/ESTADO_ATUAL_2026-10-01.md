@@ -4,7 +4,7 @@ Este documento registra o estado verificado no código e no banco local em 01/10
 
 **Atualização de 02/10/2026:** a instalação agora é atribuída somente à pessoa. O projeto é contexto observado quando aparece na URL e não bloqueia o envio em outros chats. Os procedimentos abaixo foram ajustados para esse fluxo; os números históricos desta seção continuam referentes a 01/10.
 
-**Estrutura ativa em 13/10/2026:** o backend principal fica em `backend/` e a extensão de captura de stream 0.3.0 fica em `extension/`. As versões anteriores estão em `obsolete/`. Carregue somente `extension/` no Chrome e siga o [guia da extensão ativa](../extension/README.md). Como a pasta mudou, o Chrome gera outro ID para a instalação unpacked; cadastre e atribua a nova instalação.
+**Estrutura ativa em 13/10/2026:** o backend principal fica em `backend/` e a extensão de captura de stream 0.3.0 fica em `extension/`. As versões anteriores estão em `obsolete/`. Carregue somente `extension/` no Chrome e siga o [guia da extensão ativa](../../extension/README.md). Como a pasta mudou, o Chrome gera outro ID para a instalação unpacked; cadastre e atribua a nova instalação.
 
 ## Componentes registrados em 01/10/2026
 
@@ -25,7 +25,7 @@ Este documento registra o estado verificado no código e no banco local em 01/10
 
 ## Ativação atual
 
-Use o guia da [extensão ativa](../extension/README.md) para carregar o pacote 0.3.0, cadastrar a instalação, atribuí-la a uma pessoa e executar ensaios sintéticos. As instruções detalhadas abaixo desta seção pertenciam à versão anterior e foram substituídas.
+Use o guia da [extensão ativa](../../extension/README.md) para carregar o pacote 0.3.0, cadastrar a instalação, atribuí-la a uma pessoa e executar ensaios sintéticos. As instruções detalhadas abaixo desta seção pertenciam à versão anterior e foram substituídas.
 ## Próxima validação
 
-Execute o [roteiro local](ROTEIRO_VALIDACAO_LOCAL_POC_v0.1.md) com a versão 0.5.0. Registre separadamente falhas de token (`401`), atribuição pendente, bloqueio por política e falha de captura. Depois compare cada prompt e resposta persistidos com o conteúdo visível no navegador. A pesquisa de captura pela rede e a retenção/liberação da resposta permanecem etapas futuras.
+Execute o [roteiro local](../guide/ROTEIRO_VALIDACAO_LOCAL_POC_v0.1.md) com a versão 0.5.0. Registre separadamente falhas de token (`401`), atribuição pendente, bloqueio por política e falha de captura. Depois compare cada prompt e resposta persistidos com o conteúdo visível no navegador. A pesquisa de captura pela rede e a retenção/liberação da resposta permanecem etapas futuras.

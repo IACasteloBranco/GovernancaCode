@@ -273,3 +273,66 @@ def test_operator_assignment_requires_matching_key_fingerprint(client, monkeypat
     assert assigned["employee_id"] == "func-001"
     assert assigned["department_code"] == "dep-sintetico"
     assert assigned["project_id"] is None
+
+
+def test_machine_assignment_request_waits_for_operator_approval(client):
+    now = iso(utc_now())
+    with connect(get_settings()) as db:
+        db.execute(
+            "INSERT INTO departments(department_code, department_name, active, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
+            ("dep-sintetico", "Departamento Sintético", now, now),
+        )
+        db.execute(
+            "INSERT INTO employees(employee_id, person_name, department_code, active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+            ("func-001", "PESSOA-SINTETICA", "dep-sintetico", now, now),
+        )
+
+    machine_id = uuid4()
+    private, public = key_material()
+    registered = client.post(
+        "/v1/machines", json={"installation_id": str(machine_id), "public_key": public}, headers=AUTH,
+    )
+    assert registered.status_code == 200
+
+    request_path = f"/v1/machines/{machine_id}/assignment-request"
+    requested = signed_post(client, request_path, {"employee_id": "func-001"}, machine_id, private)
+    assert requested.status_code == 200
+    assert requested.json()["status"] == "pending"
+    assert requested.json()["person_name"] == "PESSOA-SINTETICA"
+    assert signed_get(client, f"/v1/machines/{machine_id}", machine_id, private).json()["requested_employee_id"] == "func-001"
+    assert signed_post(client, "/v1/interactions", prompt_payload(machine_id), machine_id, private).status_code == 403
+
+    inbox_path = "/v1/admin/machines/assignment-requests"
+    assert client.get(inbox_path).status_code == 401
+    inbox = client.get(inbox_path, headers=OPERATOR_AUTH).json()["items"]
+    assert len(inbox) == 1
+    assert inbox[0]["installation_id"] == str(machine_id)
+    assert inbox[0]["can_approve"] is True
+
+    approved = client.post(
+        f"/v1/admin/machines/{machine_id}/assignment-request/approve", headers=OPERATOR_AUTH,
+    )
+    assert approved.status_code == 200
+    machine = signed_get(client, f"/v1/machines/{machine_id}", machine_id, private).json()
+    assert machine["employee_id"] == "func-001"
+    assert machine["person_name"] == "PESSOA-SINTETICA"
+    assert machine["requested_employee_id"] is None
+    assert signed_post(client, "/v1/interactions", prompt_payload(machine_id), machine_id, private).status_code == 201
+
+    rejected_machine_id = uuid4()
+    rejected_private, rejected_public = key_material()
+    assert client.post(
+        "/v1/machines", json={"installation_id": str(rejected_machine_id), "public_key": rejected_public}, headers=AUTH,
+    ).status_code == 200
+    rejected_request = signed_post(
+        client, f"/v1/machines/{rejected_machine_id}/assignment-request", {"employee_id": "func-001"},
+        rejected_machine_id, rejected_private,
+    )
+    assert rejected_request.status_code == 200
+    rejected = client.post(
+        f"/v1/admin/machines/{rejected_machine_id}/assignment-request/reject", headers=OPERATOR_AUTH,
+    )
+    assert rejected.status_code == 200
+    machine = signed_get(client, f"/v1/machines/{rejected_machine_id}", rejected_machine_id, rejected_private).json()
+    assert machine["employee_id"] is None
+    assert machine["requested_employee_id"] is None

@@ -2,9 +2,9 @@
 
 **Versão:** 0.1  
 **Data:** 24/09/2026  
-**Base:** [especificação da POC](../POC_EXTENSAO_BACKEND_GOVERNANCA_IA_v0.1.md), [plano da extensão](PLANO_IMPLANTACAO_EXTENSAO_POC_v0.1.md) e [plano do backend](PLANO_IMPLANTACAO_BACKEND_POC_v0.1.md).  
+**Base:** [especificação da POC](../reference/POC_EXTENSAO_BACKEND_GOVERNANCA_IA_v0.1.md), [plano da extensão](../plans/PLANO_IMPLANTACAO_EXTENSAO_POC_v0.1.md) e [plano do backend](../plans/PLANO_IMPLANTACAO_BACKEND_POC_v0.1.md).  
 **Ambiente inicial (histórico):** extensão Chrome 0.1.4 e API local em `127.0.0.1:8000`.  
-**Aplicação atual:** executar os cenários com a extensão integrada 0.5.0 após o [vínculo administrativo](ESTADO_ATUAL_2026-10-01.md); registrar a versão usada em cada rodada.
+**Aplicação atual:** executar os cenários com a extensão integrada 0.5.0 após o [vínculo administrativo](../archive/ESTADO_ATUAL_2026-10-01.md); registrar a versão usada em cada rodada.
 
 ## 1. Ponto de partida e objetivo
 
@@ -14,7 +14,7 @@ A próxima etapa mede, com casos reproduzíveis, se a extensão detecta as rotas
 
 ## 2. Entregas desta etapa
 
-1. Registro de cada execução no [modelo de evidências](REGISTRO_EVIDENCIAS_POC_v0.1.csv), incluindo versão do Chrome, extensão e backend.
+1. Registro de cada execução no [modelo de evidências](../archive/REGISTRO_EVIDENCIAS_POC_v0.1.csv), incluindo versão do Chrome, extensão e backend.
 2. Matriz abaixo executada por clique, Enter, respostas curtas/longas, navegação, duas abas e indisponibilidade da API.
 3. Lista de defeitos reproduzíveis, com causa provável, correção e nova execução dos cenários afetados.
 4. Relatório curto de fechamento: cobertura observada, falhas abertas, viabilidade do contexto de projeto e decisão sobre a próxima iteração.

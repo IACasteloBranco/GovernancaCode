@@ -10,10 +10,16 @@ O stream bruto, cookies, cabeçalhos de autenticação e bytes de arquivos não 
 
 1. Inicie o backend em `backend/` com `.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000`.
 2. Em `chrome://extensions`, carregue ou recarregue a pasta `extension` como extensão descompactada. Recarregue também a aba do ChatGPT após uma atualização da extensão.
-3. No popup, configure somente o `CAPTURE_API_TOKEN` definido em `backend/.env`. Atribua a instalação pelo backend com ID do colaborador e código do departamento antes de habilitar a captura. O token de operador nunca deve ser colocado na extensão.
+3. Antes da coleta, entregue o termo interno para assinatura. No popup, leia e confirme ciência do aviso de privacidade. Configure somente o `CAPTURE_API_TOKEN` definido em `backend/.env`. Informe o código do colaborador em **Solicitar vínculo**; a captura só poderá ser ativada depois que o operador aprovar o pedido no backend. O token de operador nunca deve ser colocado na extensão.
 4. Faça ensaios somente com conteúdo sintético. O bloqueador mantém o envio fechado quando a política ou a atribuição não está disponível.
 
 ## Piloto com Google Workspace
+
+### ID estável da extensão e URI OAuth
+
+O campo `key` em `manifest.json` fixa o ID da extensão como `njcbfaglhfigplenmpaojjgdbcjcfbjh`, inclusive quando a pasta sem compactação é carregada em caminhos diferentes. A URI OAuth gerada por `chrome.identity.getRedirectURL()` é `https://njcbfaglhfigplenmpaojjgdbcjcfbjh.chromiumapp.org/`.
+
+Cadastre essa URI exata nas URIs de redirecionamento autorizadas do cliente OAuth e configure o mesmo valor em `GOOGLE_EXTENSION_REDIRECT_URI` no backend. Não remova nem troque a chave pública do manifesto. A chave privada de empacotamento fica em `.secrets/chrome-extension-signing.pem`, fora da pasta distribuída, e não deve ser copiada para as máquinas dos participantes.
 
 O modo `cloud` usa login individual pelo Google Workspace e exige uma instalação atribuída à mesma conta no backend. Para preparar o pacote, a TI deve:
 
@@ -23,7 +29,7 @@ O modo `cloud` usa login individual pelo Google Workspace e exige uma instalaç�
 
 Com a configuração incompleta, o login e a captura em nuvem ficam indisponíveis. No popup, a pessoa entra explicitamente com sua conta, atualiza a identificação da instalação e só então ativa a captura. A extensão conserva o ID token apenas em `chrome.storage.session`; expiração, ausência de sessão ou `401`/`403` da API fecham o bloqueio e exigem novo login. A API deve validar o token Google e conferir que o `sub` da conta está vinculado à instalação em `GET /v1/machines/{installation_id}`. Uma conta compartilhada não identifica o funcionário que fez o envio.
 
-Após o primeiro login do operador, o popup mostra o **Identificador Google (sub)**. O operador deve fornecer esse valor à TI pelo canal interno aprovado para configurar `GOOGLE_OPERATOR_SUB` no backend. O popup não mostra o ID token nem o segredo OAuth.
+Após o primeiro login, o popup mostra o **Identificador Google (sub)**. A TI deve configurar os `sub` de liderança e chefia de IA em `GOOGLE_CONTENT_VIEWER_SUBS`, separados por vírgula. A exclusão dos dados do backend é executada pelo responsável no host do serviço com uma conta individual do sistema operacional. O popup não mostra o ID token nem o segredo OAuth.
 
 O modo `local` mantém o token `CAPTURE_API_TOKEN` para desenvolvimento em `127.0.0.1`. Não distribua esse modo como pacote do piloto.
 
@@ -32,6 +38,8 @@ O coordenador registra o prompt ao liberar o envio e vincula seu ID ao primeiro 
 No envio, a extensão observa os seletores de arquivo e os cartões de anexo dentro do compositor ativo. Ela registra nome, MIME informado pelo navegador e tamanho quando disponíveis; o cartão pode expor apenas o nome. Prompt vazio só é aceito quando há arquivo selecionado observado. A captura não lê bytes, não deduz MIME pela extensão do nome e não comprova que o serviço remoto recebeu ou processou o arquivo. Se os controles não puderem ser inspecionados, o estado fica `unavailable`; se forem inspecionados sem arquivo, fica `not_observed`.
 
 O comando **Tentar novamente** reavalia o mesmo prompt pela política antes de liberar outro POST. O vínculo local usa o caminho da conversa e o UUID `data-turn-key`; apenas o hash SHA-256 do texto normalizado acompanha o vínculo, para validar que o texto continua correspondente. O histórico mantém os 500 vínculos mais recentes, então a nova resposta continua ligada à interação original após recarregar a aba. Cada resposta usa seu próprio `client_event_id`, que também identifica seu registro técnico em `stream_captures`. Mensagens dirigidas a ferramentas e mensagens de raciocínio não entram no texto final.
+
+O popup exige confirmação de ciência da versão atual do aviso antes de habilitar a captura. Essa confirmação fica no perfil do Chrome e não substitui o termo assinado. Históricos locais de capturas, metadados, diagnósticos e vínculos são limpos após 90 dias; se o Chrome estiver fechado, a limpeza ocorre na próxima execução. **Apagar dados locais** remove também a chave e o vínculo da instalação e gera um novo identificador. Essa ação não apaga registros do backend; peça a exclusão pelo telefone publicado no aviso.
 
 ## Verificação
 

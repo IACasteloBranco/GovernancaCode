@@ -1,6 +1,6 @@
 # POC de captura no fluxo de rede do ChatGPT Web
 
-> Registro experimental iniciado em 25/09/2026. A sonda permanece separada da extensão integrada 0.5.0; veja o [estado atual](ESTADO_ATUAL_2026-10-01.md). As observações de `HTTP 401` abaixo descrevem aqueles ensaios, não um diagnóstico da sessão atual.
+> Registro experimental iniciado em 25/09/2026. A sonda permanece separada da extensão integrada 0.5.0; veja o [estado atual](../archive/ESTADO_ATUAL_2026-10-01.md). As observações de `HTTP 401` abaixo descrevem aqueles ensaios, não um diagnóstico da sessão atual.
 
 **Estado:** investigação experimental. O print do DevTools de 25/09/2026 mostra uma requisição `conversation` via `fetch`, HTTP 200, 8,58 s, seguida por chamadas `prepare`, `batch` e `finalize`. O print não revela o corpo ou o sinal de conclusão; o protocolo da resposta permanece não identificado.
 
